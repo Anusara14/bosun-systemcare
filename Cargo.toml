@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/bosun-core", "crates/bosun-tray"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "Proprietary"
+
+[workspace.dependencies]
+windows = "0.62"
+
+# Small, fast binaries: memory and size are a product feature.
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

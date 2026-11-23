@@ -3,8 +3,6 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod gfx;
-mod layered;
 mod monitor;
 mod popup;
 mod settings;
@@ -33,8 +31,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, Result, w};
 
-use crate::gfx::Gfx;
 use crate::settings::Settings;
+pub use bosun_ui::{gfx, graphics, layered};
 
 pub const WM_TRAY: u32 = WM_APP + 1;
 const WM_OTHER_INSTANCE: u32 = WM_APP + 2;
@@ -147,7 +145,6 @@ impl State {
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
-    static GFX: Cell<Option<&'static Gfx>> = const { Cell::new(None) };
     static HOST: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
     static HINST: Cell<HINSTANCE> = const { Cell::new(HINSTANCE(std::ptr::null_mut())) };
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
@@ -165,10 +162,6 @@ pub fn with_data<R>(f: impl FnOnce(&Data) -> R) -> Option<R> {
             .ok()
             .and_then(|g| g.as_ref().map(|st| f(&st.data)))
     })
-}
-
-pub fn graphics() -> &'static Gfx {
-    GFX.with(|g| g.get()).expect("graphics initialised in main")
 }
 
 pub fn hinstance() -> HINSTANCE {
@@ -354,8 +347,7 @@ fn run() -> Result<()> {
         }
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         shell::enable_dark_menus();
-        let gfx: &'static Gfx = Box::leak(Box::new(Gfx::new()?));
-        GFX.with(|g| g.set(Some(gfx)));
+        bosun_ui::init()?;
         let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
         HINST.with(|h| h.set(hinst));
 

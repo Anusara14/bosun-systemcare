@@ -1,5 +1,5 @@
-﻿//! "Memory released" card shown under the widget after Clean RAM.
-//! 230 Ã— 123 px, 7 px below the pill and 2 px left of the knob (reference layout).
+//! "Memory released" card shown under the widget after Clean RAM.
+//! 230 × 123 px, 7 px below the pill and 2 px left of the knob (reference layout).
 
 use std::cell::RefCell;
 
@@ -100,7 +100,7 @@ fn draw(p: &Painter, freed: u64, hover: Part) {
     let card = rect(0.5, 0.5, W - 1.0, H - 1.0);
     p.fill_rr(card, 6.0, col(pc::BG));
     p.stroke_rr(card, 6.0, 1.0, col(pc::BORDER));
-    // close Ã—, 8 px, centred at (215.5, 13.5)
+    // close ×, 8 px, centred at (215.5, 13.5)
     let c = col(if hover == Part::Close {
         pc::CLOSE_HOVER
     } else {

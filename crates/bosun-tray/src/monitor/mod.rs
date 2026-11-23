@@ -1,5 +1,5 @@
-﻿//! Performance Monitor flyout, laid out pixel-for-pixel from the reference
-//! (520 Ã— 385): title bar, five 100 px tabs with ring gauges, a framed process
+//! Performance Monitor flyout, laid out pixel-for-pixel from the reference
+//! (520 × 385): title bar, five 100 px tabs with ring gauges, a framed process
 //! table with section rows, and a footer with tools + End Task. Black palette.
 //! Hides when it loses focus and drops its render target and caches when hidden.
 

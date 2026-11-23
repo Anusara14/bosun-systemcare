@@ -13,7 +13,7 @@ def text_path(font_file, text, size, x, baseline):
         d.append(pen.getCommands()); x += gs[g].width * s
     return " ".join(d), x
 
-icon = open("bosun-icon.svg", encoding="utf-8").read()
+icon = open("bosun-tray.svg", encoding="utf-8").read()
 icon_inner = re.sub(r"^<svg[^>]*>|</svg>\s*$", "", icon.strip())
 ICON = f'<svg x="0" y="0" width="260" height="260" viewBox="0 0 260 260" overflow="visible">{icon_inner}</svg>'
 F = "C:/Windows/Fonts/"

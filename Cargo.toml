@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/bosun-core", "crates/bosun-tray"]
+members = ["crates/bosun-core", "crates/bosun-ui", "crates/bosun-tray", "crates/bosun-app"]
 
 [workspace.package]
 edition = "2024"

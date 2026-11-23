@@ -1,6 +1,9 @@
 # Bosun SystemCare: logo usage
 
 ## Files
+The circle B mark (`svg/bosun-tray.svg`) is the app icon everywhere: exe, taskbar, tray, lockups.
+The glass tile (`svg/bosun-icon.svg`, `svg/bosun-icon-app.svg`) is kept as an alternate.
+
 | Use | File |
 |---|---|
 | App / taskbar / installer icon | `ico/bosun.ico` (16–256 px) |

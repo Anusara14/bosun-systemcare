@@ -18,8 +18,8 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_WEIGHT_NORMAL,
     DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
     DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
-    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
-    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+    DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
@@ -285,6 +285,7 @@ fn text_format(
 pub enum Align {
     Left,
     Center,
+    Right,
 }
 
 impl Align {
@@ -292,6 +293,7 @@ impl Align {
         match self {
             Align::Left => DWRITE_TEXT_ALIGNMENT_LEADING,
             Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
+            Align::Right => DWRITE_TEXT_ALIGNMENT_TRAILING,
         }
     }
 }

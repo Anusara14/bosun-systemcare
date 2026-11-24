@@ -119,7 +119,7 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn text_at(
+pub(crate) fn text_at(
     p: &Painter,
     s: &str,
     f: &IDWriteTextFormat,
@@ -344,7 +344,7 @@ fn draw_title(p: &Painter, title: &str, x: f32, cap_y: f32) {
     }
 }
 
-fn pill(p: &Painter, r: D2D_RECT_F, label: &str, hover: bool) {
+pub(crate) fn pill(p: &Painter, r: D2D_RECT_F, label: &str, hover: bool) {
     let x = (r.left + r.right) / 2.0;
     let rad = BTN_H / 2.0;
     let stops = [(0.0, col(0x8DC3F8)), (1.0, col(0x6DB4F7))];
@@ -457,7 +457,7 @@ fn draw_tools(p: &Painter, c: &D2D_RECT_F) {
 
 /// Orange "i" badge (attention) or blue tick badge (all good), as in the
 /// reference: 7 px radius, bottom-right of the icon.
-fn badge(p: &Painter, x: f32, y: f32, ok: bool) {
+pub(crate) fn badge(p: &Painter, x: f32, y: f32, ok: bool) {
     let k = col(0x141414);
     if ok {
         p.circle(x, y, 7.0, col(sp::BLUE));

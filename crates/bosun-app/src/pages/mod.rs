@@ -3,10 +3,12 @@
 pub mod care;
 pub mod optimizer;
 mod placeholder;
+pub mod protect;
 pub mod scan;
 pub mod speedup;
 pub mod tools;
 pub mod turbo;
+pub mod updater;
 
 use bosun_ui::gfx::Painter;
 
@@ -68,6 +70,8 @@ pub fn draw(p: &Painter, v: &View) {
     match v.page {
         Page::Care => care::draw(p, v),
         Page::SpeedUp => speedup::draw(p, v),
+        Page::Protect => protect::draw(p, v),
+        Page::Updater => updater::draw(p, v),
         other => placeholder::draw(p, v, other),
     }
 }
@@ -82,6 +86,8 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
     match v.page {
         Page::Care => care::hit(v, x, y),
         Page::SpeedUp => speedup::hit(v, x, y),
+        Page::Protect => protect::hit(v, x, y),
+        Page::Updater => updater::hit(v, x, y),
         _ => Hit::None,
     }
 }

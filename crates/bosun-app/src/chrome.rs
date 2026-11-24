@@ -272,6 +272,8 @@ mod tests {
             opt: None,
             turbo: None,
             tools: false,
+            protect: Default::default(),
+            updater: None,
             note: None,
             maximized: false,
         }

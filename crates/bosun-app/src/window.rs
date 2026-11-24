@@ -38,6 +38,7 @@ const SPIN_TIMER: usize = 1;
 const SCAN_TIMER: usize = 5;
 /// Polls the Windows Update driver search while it runs.
 const DRIVER_TIMER: usize = 8;
+const UPDATE_TIMER: usize = 9;
 /// Test hook timers: with `BOSUN_HOVER_SCRIPT=1` the window replays the
 /// reference recording's hover (in, then out 1733 ms later, as in the
 /// recording) without a mouse, starting 1.5 s after launch,
@@ -133,6 +134,15 @@ pub enum Hit {
     /// More Optimization Tools: a tool (see `pages::tools::COLUMNS`), or the window.
     Tool(u8),
     ToolsOpen,
+    /// Protect: a privacy switch, Homepage Advisor, Windows Security.
+    Privacy(u8),
+    Advisor,
+    OpenSecurity,
+    /// Software Updater (indices are into winget's list).
+    UpdAll,
+    UpdOne(usize),
+    UpdIgnore(usize),
+    UpdRow(usize),
 }
 
 impl Hit {
@@ -167,6 +177,9 @@ pub struct View {
     pub turbo: Option<crate::pages::turbo::TurboView>,
     /// The More Optimization Tools window is open.
     pub tools: bool,
+    pub protect: crate::pages::protect::ProtectInfo,
+    /// The Software Updater's list, on that page.
+    pub updater: Option<crate::pages::updater::UpdView>,
     pub note: Option<&'static str>,
     pub maximized: bool,
 }
@@ -193,6 +206,8 @@ struct App {
     opt: Option<crate::pages::optimizer::Optimizer>,
     turbo: Option<crate::pages::turbo::Turbo>,
     tools: bool,
+    protect: crate::pages::protect::ProtectInfo,
+    updater: crate::pages::updater::Updater,
     /// Running layout change between modes: (start, from, to).
     mode_anim: Option<(Instant, f32, f32)>,
     /// Running hover transition: (start, from, to).
@@ -235,6 +250,8 @@ impl App {
             opt: self.opt.as_ref().map(|o| o.view()),
             turbo: self.turbo.as_ref().map(|t| t.view()),
             tools: self.tools,
+            protect: self.protect.clone(),
+            updater: (self.page == Page::Updater).then(|| self.updater.view()),
             note: self
                 .note
                 .filter(|(_, at)| at.elapsed().as_secs() < 5)
@@ -343,6 +360,12 @@ pub fn create(page: Page) -> Result<()> {
                 // capture hook: BOSUN_TURBO_TAB=<n> opens the Turbo Boost settings
                 // capture hook: BOSUN_TOOLS=1 opens More Optimization Tools
                 tools: std::env::var_os("BOSUN_TOOLS").is_some(),
+                protect: if page == Page::Protect {
+                    crate::pages::protect::ProtectInfo::load()
+                } else {
+                    Default::default()
+                },
+                updater: Default::default(),
                 turbo: std::env::var("BOSUN_TURBO_TAB")
                     .ok()
                     .and_then(|t| t.parse().ok())
@@ -368,9 +391,17 @@ pub fn create(page: Page) -> Result<()> {
         if std::env::var_os("BOSUN_SCAN_SCRIPT").is_some() {
             SetTimer(Some(hwnd), SCRIPT_SCAN, 1500, None);
         }
+        if page == Page::Updater {
+            with_app(|a| a.updater.load());
+            SetTimer(Some(hwnd), UPDATE_TIMER, 250, None);
+        }
         // capture hook: BOSUN_SNAPSHOT=<png> draws the first view off-screen at
         // the reference size, saves it and exits without showing the window
         if let Some(out) = std::env::var_os("BOSUN_SNAPSHOT") {
+            // snapshots show the finished winget list
+            while page == Page::Updater && with_app(|a| a.updater.poll()) == Some(true) {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
             with_app(|a| {
                 let mut v = a.view();
                 v.w = DEFAULT_W;
@@ -483,6 +514,8 @@ struct Key {
     opt: Option<crate::pages::optimizer::OptView>,
     turbo: Option<crate::pages::turbo::TurboView>,
     tools: bool,
+    protect: crate::pages::protect::ProtectInfo,
+    updater: Option<crate::pages::updater::UpdView>,
     note: Option<&'static str>,
     maximized: bool,
 }
@@ -506,6 +539,8 @@ impl Key {
             opt: v.opt.clone(),
             turbo: v.turbo.clone(),
             tools: v.tools,
+            protect: v.protect.clone(),
+            updater: v.updater.clone(),
             note: v.note,
             maximized: v.maximized,
         }
@@ -829,6 +864,14 @@ fn click(hwnd: HWND, h: Hit) {
                     if p == Page::SpeedUp {
                         a.speed = speed_info();
                     }
+                    if p == Page::Protect {
+                        a.protect = crate::pages::protect::ProtectInfo::load();
+                    }
+                    if p == Page::Updater {
+                        a.updater.load();
+                        // SAFETY: poll timer on our own window, killed when the work ends.
+                        unsafe { SetTimer(Some(hwnd), UPDATE_TIMER, 250, None) };
+                    }
                     a.page = p;
                 }
                 Hit::Card(1) => a.opt = Some(crate::pages::optimizer::Optimizer::open(0)),
@@ -871,6 +914,36 @@ fn click(hwnd: HWND, h: Hit) {
                 }
                 Hit::Card(3) => a.opt = Some(crate::pages::optimizer::Optimizer::open_apps()),
                 Hit::ToolsOpen => a.tools = true,
+                Hit::Privacy(k) => {
+                    let on = a.protect.privacy[k as usize];
+                    let ok = bosun_core::clean::journal_dir()
+                        .is_some_and(|d| bosun_core::privacy::set(k as usize, !on, &d).is_ok());
+                    if !ok {
+                        a.note = Some(("Couldn't change that setting.", Instant::now()));
+                    }
+                    a.protect = crate::pages::protect::ProtectInfo::load();
+                }
+                Hit::Advisor => {
+                    if bosun_core::homepage::set_advisor(!a.protect.advisor).is_err() {
+                        a.note = Some((
+                            "Couldn't save the Homepage Advisor setting.",
+                            Instant::now(),
+                        ));
+                    }
+                    a.protect = crate::pages::protect::ProtectInfo::load();
+                }
+                Hit::OpenSecurity => {
+                    shell("windowsdefender:", "");
+                }
+                Hit::UpdAll | Hit::UpdOne(_) => {
+                    a.updater.enqueue(match h {
+                        Hit::UpdOne(i) => Some(i),
+                        _ => None,
+                    });
+                    // SAFETY: poll timer on our own window, killed when the work ends.
+                    unsafe { SetTimer(Some(hwnd), UPDATE_TIMER, 250, None) };
+                }
+                Hit::UpdIgnore(i) => a.updater.ignore(i),
                 Hit::Card(2) => {
                     a.opt = Some(crate::pages::optimizer::Optimizer::open_drivers());
                     // SAFETY: poll timer on our own window, killed when the search ends.
@@ -1185,6 +1258,10 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 let dy = -delta / 120.0;
                 a.turbo.as_mut().map(|t| t.scroll_by(dy * 40.0)).is_some()
                     || a.opt.as_mut().map(|o| o.scroll_by(dy * 61.0, h)).is_some()
+                    || (a.page == Page::Updater && {
+                        a.updater.scroll_by(dy * 78.0, h);
+                        true
+                    })
             });
             if changed == Some(true) {
                 invalidate(hwnd);
@@ -1204,6 +1281,13 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             if busy != Some(true) {
                 // SAFETY: our own timer.
                 let _ = unsafe { KillTimer(Some(hwnd), DRIVER_TIMER) };
+            }
+            invalidate(hwnd);
+        }
+        WM_TIMER if wp.0 == UPDATE_TIMER => {
+            if with_app(|a| a.updater.poll()) != Some(true) {
+                // SAFETY: our own timer.
+                let _ = unsafe { KillTimer(Some(hwnd), UPDATE_TIMER) };
             }
             invalidate(hwnd);
         }
@@ -1556,6 +1640,8 @@ pub fn test_view() -> View {
         opt: None,
         turbo: None,
         tools: false,
+        protect: Default::default(),
+        updater: None,
         note: None,
         maximized: false,
     }

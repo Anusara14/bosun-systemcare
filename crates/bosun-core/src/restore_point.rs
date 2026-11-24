@@ -6,14 +6,8 @@
 
 use std::io;
 
-use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
-use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
-use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
-use windows::core::{HSTRING, w};
-
 /// Longest we wait for Windows to finish the point.
-const WAIT_MS: u32 = 5 * 60 * 1000;
+const WAIT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 /// The PowerShell arguments for a point named `description`, reduced to
 /// letters, digits, spaces and `:-` so it can't break out of the quotes.
@@ -32,34 +26,16 @@ pub fn command(description: &str) -> String {
 /// Creates a restore point, waiting for it. Errors when the prompt is
 /// declined, System Protection is off, or PowerShell reports a failure.
 pub fn create(description: &str) -> io::Result<()> {
-    let args = HSTRING::from(command(description));
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS,
-        lpVerb: w!("runas"),
-        lpFile: w!("powershell.exe"),
-        lpParameters: windows::core::PCWSTR(args.as_ptr()),
-        nShow: SW_HIDE.0,
-        ..Default::default()
-    };
-    // SAFETY: `info` and the strings it points at outlive the call; the
-    // process handle we get back is closed below.
-    unsafe {
-        ShellExecuteExW(&mut info).map_err(|e| io::Error::other(format!("not started: {e}")))?;
-        if info.hProcess.is_invalid() {
-            return Err(io::Error::other("no process"));
-        }
-        let waited = WaitForSingleObject(info.hProcess, WAIT_MS);
-        let mut code = 1u32;
-        let _ = GetExitCodeProcess(info.hProcess, &mut code);
-        let _ = CloseHandle(info.hProcess);
-        if waited != WAIT_OBJECT_0 {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "still running"));
-        }
-        if code == 0 {
-            Ok(())
-        } else {
+    let began = std::time::Instant::now();
+    match crate::elevate::run("powershell.exe", &command(description), &|| {
+        began.elapsed() > WAIT
+    })? {
+        crate::elevate::Outcome::Exited(0) => Ok(()),
+        crate::elevate::Outcome::Exited(code) => {
             Err(io::Error::other(format!("PowerShell exited with {code}")))
+        }
+        crate::elevate::Outcome::LeftRunning => {
+            Err(io::Error::new(io::ErrorKind::TimedOut, "still running"))
         }
     }
 }

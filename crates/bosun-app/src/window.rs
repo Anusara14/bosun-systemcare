@@ -450,7 +450,11 @@ pub fn create(request: Request) -> Result<()> {
                 page,
                 hover: Hit::None,
                 pressed: Hit::None,
-                mode: Mode::Recommended,
+                mode: if std::env::var_os("BOSUN_MANUAL").is_some() {
+                    Mode::Manual
+                } else {
+                    Mode::Recommended
+                },
                 // capture hook: BOSUN_SCAN_HOVER=<0..1> freezes the SCAN hover there
                 scan_hover: std::env::var("BOSUN_SCAN_HOVER")
                     .ok()
@@ -465,7 +469,12 @@ pub fn create(request: Request) -> Result<()> {
                     || crate::tray_ini::get_from(crate::tray_ini::APP, "auto_fix", false),
                 auto_ran: false,
                 picks: crate::pages::settings::saved_picks(),
-                manual_t: 0.0,
+                // capture hook: BOSUN_MANUAL=1 starts in Manual mode
+                manual_t: if std::env::var_os("BOSUN_MANUAL").is_some() {
+                    1.0
+                } else {
+                    0.0
+                },
                 speed: speed_info(),
                 // capture hook: BOSUN_OPT_TAB=<n> opens the Startup Optimizer
                 opt: std::env::var("BOSUN_OPT_TAB")

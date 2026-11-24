@@ -22,6 +22,8 @@ pub enum Status {
     Done(Tally),
     /// A status check (antivirus, firewall): healthy or not.
     Health(bool),
+    /// Things for the user to do elsewhere (Windows updates waiting).
+    Attention(u32),
     Skipped,
 }
 
@@ -33,12 +35,21 @@ pub enum Kind {
     Registry,
     Antivirus,
     Firewall,
+    Tweaks,
+    Disk,
+    Updates,
 }
 
 impl Kind {
     /// Fix can act on what this module finds.
     pub fn fixable(self) -> bool {
-        !matches!(self, Kind::Antivirus | Kind::Firewall)
+        !matches!(self, Kind::Antivirus | Kind::Firewall | Kind::Updates)
+    }
+
+    /// Ticked in the summary by default. Disk Optimization asks for
+    /// administrator rights and can run long, so it waits to be chosen.
+    pub fn ticked(self) -> bool {
+        self != Kind::Disk
     }
 }
 
@@ -63,7 +74,7 @@ const fn info(kind: Kind, pick: &'static str, name: &'static str, what: &'static
 /// The modules that do real work (spec §2.1). IObit's Internet Boost,
 /// Registry Defrag and Spyware Removal are deliberately absent (no effect on
 /// Windows 10/11, or a malware engine Defender already provides).
-pub const MODULES: [Info; 6] = [
+pub const MODULES: [Info; 9] = [
     info(
         Kind::Privacy,
         "Privacy Sweep",
@@ -90,6 +101,25 @@ pub const MODULES: [Info; 6] = [
         "antivirus protection",
     ),
     info(Kind::Firewall, "Firewall", "Firewall", "firewall"),
+    // appended, not inserted: saved Care picks are stored by position
+    info(
+        Kind::Tweaks,
+        "System Optimization",
+        "System settings",
+        "system settings to optimize",
+    ),
+    info(
+        Kind::Disk,
+        "Disk Optimization",
+        "Drives",
+        "drives to optimize",
+    ),
+    info(
+        Kind::Updates,
+        "Windows Update",
+        "Windows updates",
+        "waiting Windows updates",
+    ),
 ];
 
 /// Every module ticked.
@@ -247,7 +277,7 @@ pub fn start(picks: u16) -> Scan {
             name: m.name,
             what: m.what,
             status: Status::Waiting,
-            checked: true,
+            checked: m.kind.ticked(),
             fixed: None,
         })
         .collect();
@@ -289,6 +319,9 @@ fn module_pct(done: usize, n: usize, dirs: u32) -> f32 {
     // only a finished module may show 100 %
     (base + (1.0 - base) * creep(dirs)).min(0.99)
 }
+
+/// Longest a scan waits for Windows Update's answer.
+const UPDATES_WAIT_SECS: f32 = 120.0;
 
 /// Scans one module; `report(item, fraction)` moves the screen and returns
 /// `false` to cancel. `None` when cancelled.
@@ -350,6 +383,50 @@ fn scan_one(kind: Kind, report: &mut dyn FnMut(&str, f32) -> bool) -> Option<Sta
                 return None;
             }
             security::healthy(p).map_or(Status::Skipped, Status::Health)
+        }
+        Kind::Tweaks => {
+            if !report(r"Control Panel\Desktop", 0.5) {
+                return None;
+            }
+            Status::Done(Tally {
+                files: bosun_core::tweaks::pending().len() as u64,
+                bytes: 0,
+            })
+        }
+        Kind::Disk => {
+            let drives = bosun_core::disks::fixed();
+            if !report(&drives.join("  "), 0.5) {
+                return None;
+            }
+            Status::Done(Tally {
+                files: drives.len() as u64,
+                bytes: 0,
+            })
+        }
+        Kind::Updates => {
+            // Windows Update checks online and can take minutes (or hang while
+            // Windows is busy updating): ask on a thread, give up after two minutes
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(bosun_core::drivers::pending_updates().map(|v| v.len()));
+            });
+            let began = Instant::now();
+            loop {
+                let waited = began.elapsed().as_secs_f32();
+                if !report(
+                    "Asking Windows Update…",
+                    (waited / UPDATES_WAIT_SECS).min(0.95),
+                ) {
+                    return None;
+                }
+                match rx.recv_timeout(Duration::from_millis(250)) {
+                    Ok(Ok(n)) => break Status::Attention(n as u32),
+                    Ok(Err(_)) => break Status::Skipped,
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break Status::Skipped,
+                    Err(_) if waited >= UPDATES_WAIT_SECS => break Status::Skipped,
+                    Err(_) => {}
+                }
+            }
         }
     };
     Some(status)
@@ -426,7 +503,23 @@ fn fix_one(
             let found = registry::find(&mut |_| true);
             registry::fix(&found, dir, dry_run, progress).map(counts)
         }
-        Kind::Antivirus | Kind::Firewall => Ok(Cleaned::default()),
+        Kind::Tweaks => {
+            let which = bosun_core::tweaks::pending();
+            bosun_core::tweaks::apply(&which, dir, dry_run, progress).map(counts)
+        }
+        Kind::Disk => {
+            let n = bosun_core::disks::fixed().len() as u64;
+            progress(
+                "Optimizing drives (Windows asks for administrator rights)…",
+                0.5,
+            );
+            // the wait ends with Stop; Windows finishes the optimization itself
+            let p = std::cell::RefCell::new(progress);
+            let stop = || !(p.borrow_mut())("Optimizing drives…", 0.5);
+            bosun_core::disks::optimize(dir, dry_run, &stop)?;
+            Ok(counts((n, 0)))
+        }
+        Kind::Antivirus | Kind::Firewall | Kind::Updates => Ok(Cleaned::default()),
     }
 }
 

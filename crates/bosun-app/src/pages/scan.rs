@@ -87,6 +87,19 @@ fn buttons(v: &View) -> [D2D_RECT_F; 2] {
     ]
 }
 
+/// (card height, gap) for `n` cards: the reference's 70 + 8 when they fit
+/// between the heading and the buttons, else evenly squeezed (never below 44).
+fn card_slots(v: &View, n: usize) -> (f32, f32) {
+    let avail = v.h - BTN_FROM_BOTTOM - 14.0 - 102.0;
+    let n = n.max(1) as f32;
+    if n * (CARD_H + CARD_GAP) - CARD_GAP <= avail {
+        (CARD_H, CARD_GAP)
+    } else {
+        let gap = 6.0;
+        (((avail + gap) / n - gap).max(44.0), gap)
+    }
+}
+
 fn auto_fix_box(v: &View) -> D2D_RECT_F {
     rect(content_cx(v) - 40.0, 488.5 + (v.h - 660.0), 15.0, 15.0)
 }
@@ -237,6 +250,8 @@ fn draw_list(p: &Painter, v: &View, s: &Progress) {
             }
             Status::Health(true) => done_mark(p, STATUS_X, mid),
             Status::Health(false) => info_mark(p, STATUS_X, mid),
+            Status::Attention(0) => done_mark(p, STATUS_X, mid),
+            Status::Attention(n) => badge(p, mid, u64::from(n)),
             Status::Done(_) | Status::Skipped => {
                 p.line(STATUS_X - 7.0, mid, STATUS_X + 7.0, mid, 2.0, col(sc::DASH));
             }
@@ -406,6 +421,12 @@ fn draw_summary(p: &Painter, v: &View, s: &Progress) {
         )
     } else if s.rows.iter().any(|r| r.status == Status::Health(false)) {
         ("Windows Security needs attention.".to_string(), sc::ORANGE)
+    } else if s
+        .rows
+        .iter()
+        .any(|r| matches!(r.status, Status::Attention(n) if n > 0))
+    {
+        ("Windows has updates waiting.".to_string(), sc::ORANGE)
     } else if s.rows.iter().any(|r| r.found().is_some()) {
         ("Tick a module to fix it.".to_string(), sc::TEXT)
     } else {
@@ -414,13 +435,10 @@ fn draw_summary(p: &Painter, v: &View, s: &Progress) {
     text_at(p, &head, &f.s_head, 22.0, span, 75.5, c, Align::Center);
     let card_w = v.w - RIGHT_GAP - CONTENT_X - 2.0 * CARD_INSET;
     let x = CONTENT_X + CARD_INSET;
-    let mut y = 102.0;
-    for r in &s.rows {
-        let Some(card) = summary_card(r) else {
-            continue;
-        };
-        draw_card(p, rect(x, y, card_w, CARD_H), &card);
-        y += CARD_H + CARD_GAP;
+    let cards: Vec<Card> = s.rows.iter().filter_map(summary_card).collect();
+    let (h, gap) = card_slots(v, cards.len());
+    for (k, card) in cards.iter().enumerate() {
+        draw_card(p, rect(x, 102.0 + k as f32 * (h + gap), card_w, h), card);
     }
     let _ = cx;
 }
@@ -443,11 +461,10 @@ fn draw_result(p: &Painter, v: &View, s: &Progress) {
     text_at(p, &head, &f.s_head, 22.0, span, 75.5, c, Align::Center);
     let card_w = v.w - RIGHT_GAP - CONTENT_X - 2.0 * CARD_INSET;
     let x = CONTENT_X + CARD_INSET;
-    let mut y = 102.0;
-    for r in &s.rows {
-        let Some(card) = result_card(r) else { continue };
-        draw_card(p, rect(x, y, card_w, CARD_H), &card);
-        y += CARD_H + CARD_GAP;
+    let cards: Vec<Card> = s.rows.iter().filter_map(result_card).collect();
+    let (h, gap) = card_slots(v, cards.len());
+    for (k, card) in cards.iter().enumerate() {
+        draw_card(p, rect(x, 102.0 + k as f32 * (h + gap), card_w, h), card);
     }
 }
 
@@ -468,11 +485,13 @@ struct Card {
 fn draw_card(p: &Painter, r: D2D_RECT_F, c: &Card) {
     let f = &p.g.f;
     let (x, y) = (r.left, r.top);
+    // positions scale with the card: 24 / 35 / 49.5 of the reference's 70
+    let h = r.bottom - r.top;
     p.fill_rr(r, 6.0, col(sc::CARD));
     match c.icon {
-        Icon::Broom => broom(p, x + 31.0, y + 35.0),
-        Icon::Done => done_mark(p, x + 31.0, y + 35.0),
-        Icon::Warn => info_mark(p, x + 31.0, y + 35.0),
+        Icon::Broom => broom(p, x + 31.0, y + h / 2.0),
+        Icon::Done => done_mark(p, x + 31.0, y + h / 2.0),
+        Icon::Warn => info_mark(p, x + 31.0, y + h / 2.0),
     }
     text_at(
         p,
@@ -480,7 +499,7 @@ fn draw_card(p: &Painter, r: D2D_RECT_F, c: &Card) {
         &f.s_size,
         17.0,
         (x + 74.0, 300.0),
-        y + 24.0,
+        y + h * 24.0 / 70.0,
         c.color,
         Align::Left,
     );
@@ -491,7 +510,7 @@ fn draw_card(p: &Painter, r: D2D_RECT_F, c: &Card) {
         &f.m13,
         13.0,
         (x + 75.0, w),
-        y + 49.5,
+        y + h * 49.5 / 70.0,
         sc::DIM,
         Align::Left,
     );
@@ -505,6 +524,19 @@ fn summary_card(r: &Row) -> Option<Card> {
             color: sc::ORANGE,
             line: format!(
                 "{}: off or out of date. Turn it on in Windows Security.",
+                r.name
+            ),
+        });
+    }
+    if let Status::Attention(n) = r.status
+        && n > 0
+    {
+        return Some(Card {
+            icon: Icon::Warn,
+            head: plural(u64::from(n), "update", "updates"),
+            color: sc::ORANGE,
+            line: format!(
+                "{}: waiting to install. Open Settings > Windows Update.",
                 r.name
             ),
         });
@@ -526,7 +558,21 @@ fn summary_card(r: &Row) -> Option<Card> {
                 r.name
             ),
         ),
-        Kind::Antivirus | Kind::Firewall => return None,
+        Kind::Tweaks => (
+            plural(t.files, "setting", "settings"),
+            format!(
+                "{}: real, reversible tweaks. Each old value is journaled.",
+                r.name
+            ),
+        ),
+        Kind::Disk => (
+            plural(t.files, "drive", "drives"),
+            format!(
+                "{}: Windows' own optimizer, trim or defrag. Needs admin rights.",
+                r.name
+            ),
+        ),
+        Kind::Antivirus | Kind::Firewall | Kind::Updates => return None,
     };
     Some(Card {
         icon: Icon::Broom,
@@ -545,6 +591,8 @@ fn result_card(r: &Row) -> Option<Card> {
     let out = r.fixed?;
     let head = match r.kind {
         Kind::Privacy | Kind::Junk => format!("{} freed", size(out.removed.bytes)),
+        Kind::Tweaks => format!("{} applied", out.removed.files),
+        Kind::Disk => format!("{} optimized", out.removed.files),
         _ => format!("{} removed", out.removed.files),
     };
     Some(Card {
@@ -566,6 +614,14 @@ fn result_line(module: &str, kind: Kind, c: bosun_core::clean::Cleaned) -> Strin
         Kind::Registry => format!(
             "{module}: {} removed (backup saved).",
             plural(n, "entry", "entries")
+        ),
+        Kind::Tweaks => format!(
+            "{module}: {} applied. Undo any of them from the Rescue Center.",
+            plural(n, "setting", "settings")
+        ),
+        Kind::Disk => format!(
+            "{module}: {} handed to Windows' optimizer.",
+            plural(n, "drive", "drives")
         ),
         _ => format!("{module}: {} removed.", plural(n, "file", "files")),
     };
@@ -667,6 +723,22 @@ mod tests {
         assert_eq!(size(1_395_864_371), "1.3 GB");
         assert_eq!(size(536_870_912), "512 MB");
         assert_eq!(size(40 * 1024), "40 KB");
+    }
+
+    #[test]
+    fn many_cards_stay_above_the_buttons() {
+        let v = crate::window::test_view();
+        assert_eq!(
+            card_slots(&v, 5),
+            (CARD_H, CARD_GAP),
+            "five fit at full size"
+        );
+        let (h, gap) = card_slots(&v, 8);
+        let bottom = 102.0 + 8.0 * (h + gap) - gap;
+        assert!(
+            bottom <= buttons(&v)[0].top - 13.0 && h >= 44.0,
+            "{h} {bottom}"
+        );
     }
 
     #[test]

@@ -119,7 +119,8 @@ fn when(ms: u64) -> String {
 fn icon(p: &Painter, kind: Kind, cx: f32, cy: f32) {
     let c = col(match kind {
         Kind::Clean | Kind::Recycle => 0x8FD18F,
-        Kind::Registry | Kind::Privacy => 0x61ADF8,
+        Kind::Registry | Kind::Privacy | Kind::Tweaks => 0x61ADF8,
+        Kind::Disk => 0x8FD18F,
         Kind::Startup | Kind::Services | Kind::Tasks | Kind::Turbo => 0xF5A56A,
         Kind::Other => 0xB0B0B0,
     });

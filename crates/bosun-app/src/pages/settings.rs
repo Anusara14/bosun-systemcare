@@ -20,8 +20,8 @@ const TREE_W: f32 = 233.0;
 const FOOT_Y: f32 = 600.0;
 const PAGE_X: f32 = 265.0;
 
-/// Tree rows: (label, indented). Rows 2..=7 are `MODULES`.
-const TREE: [(&str, bool); 10] = [
+/// Tree rows: (label, indented). Rows 2..=10 are `MODULES`.
+const TREE: [(&str, bool); 13] = [
     ("General Settings", false),
     ("Clean & Optimize", false),
     ("Privacy Sweep", true),
@@ -30,12 +30,15 @@ const TREE: [(&str, bool); 10] = [
     ("Registry Clean", true),
     ("Antivirus Protection", true),
     ("Firewall", true),
+    ("System Optimization", true),
+    ("Disk Optimization", true),
+    ("Windows Update", true),
     ("Auto RAM Clean", false),
     ("Logs & Backup", false),
 ];
 
 /// What each Care module really does, for its page.
-const ABOUT_MODULE: [[&str; 2]; 6] = [
+const ABOUT_MODULE: [[&str; 2]; 9] = [
     [
         "Clears browser caches and the usage traces apps leave behind.",
         "Files are deleted for good; each run is listed in the Rescue Center.",
@@ -59,6 +62,18 @@ const ABOUT_MODULE: [[&str; 2]; 6] = [
     [
         "Checks that Windows Firewall is on.",
         "Turn it on in Windows Security if a scan finds it off.",
+    ],
+    [
+        "Five real, reversible tweaks in your own registry: frozen apps end at sign-out,",
+        "shorter waits, faster menus, no startup-app delay. Undo any from the Rescue Center.",
+    ],
+    [
+        "Runs Windows' own optimizer on your fixed drives: trim on SSDs, defragment on",
+        "hard drives. Windows asks for administrator rights; it isn't ticked by default.",
+    ],
+    [
+        "Asks Windows Update which updates are waiting and tells you. Installing them",
+        "stays with Windows Update in Settings.",
     ],
 ];
 
@@ -187,8 +202,8 @@ fn checks(sel: u8) -> Vec<(u8, f32)> {
         1 => (0..MODULES.len())
             .map(|i| (10 + i as u8, 117.0 + 21.0 * i as f32))
             .collect(),
-        2..=7 => vec![(10 + sel - 2, 142.0)],
-        8 => vec![(2, 142.0)],
+        2..=10 => vec![(10 + sel - 2, 142.0)],
+        11 => vec![(2, 142.0)],
         _ => Vec::new(),
     }
 }
@@ -255,7 +270,7 @@ pub fn hit(v: &View, s: &SettingsView, x: f32, y: f32) -> Hit {
             .find(|&k| contains(&tree_row(k), x, y))
             .map_or(Hit::None, |k| Hit::SetNav(k as u8));
     }
-    if s.sel == 9 {
+    if s.sel == 12 {
         if contains(&OPEN_BTN, x, y) {
             return Hit::SetOpenLogs;
         }
@@ -405,7 +420,12 @@ fn page(p: &Painter, v: &View, s: &SettingsView) {
                 92.0,
                 0xE6E6E6,
             );
-            let b = rect(PAGE_X - 0.3, 104.0, 337.3, 6.0 * 21.0 + 14.0);
+            let b = rect(
+                PAGE_X - 0.3,
+                104.0,
+                337.3,
+                MODULES.len() as f32 * 21.0 + 14.0,
+            );
             p.stroke_rr(b, 1.0, 1.0, col(0x3A3A3A));
             for (i, m) in MODULES.iter().enumerate() {
                 check_line(p, v, s, 10 + i as u8, 117.0 + 21.0 * i as f32, m.pick);
@@ -414,16 +434,29 @@ fn page(p: &Painter, v: &View, s: &SettingsView) {
                 p,
                 &["Manual mode on the Care page can still pick modules for one scan."],
                 PAGE_X,
-                278.0,
+                104.0 + MODULES.len() as f32 * 21.0 + 14.0 + 24.0,
             );
         }
-        k @ 2..=7 => {
+        k @ 2..=10 => {
             let i = (k - 2) as usize;
             head(MODULES[i].pick);
             para(p, &ABOUT_MODULE[i], PAGE_X, 95.3);
             check_line(p, v, s, k + 8, 142.0, "Include in Care scans");
+            if MODULES[i].kind == crate::scan::Kind::Tweaks {
+                // the spec: every tweak shows the exact value it writes
+                for (n, t) in bosun_core::tweaks::TWEAKS.iter().enumerate() {
+                    let y = 184.0 + 38.0 * n as f32;
+                    text_at(p, t.label, &f.m13, 13.0, PAGE_X, 640.0, y, 0xE6E6E6);
+                    let value = match t.value {
+                        bosun_core::tweaks::Value::Sz(x) => format!("\"{x}\""),
+                        bosun_core::tweaks::Value::Dword(d) => format!("{d} (DWORD)"),
+                    };
+                    let line = format!(r"HKCU\{}\{} = {value}", t.key, t.name);
+                    text_at(p, &line, &f.m12, 12.0, PAGE_X, 640.0, y + 17.0, 0x8A8A8A);
+                }
+            }
         }
-        8 => {
+        11 => {
             head("Auto RAM Clean");
             para(
                 p,

@@ -25,6 +25,10 @@ pub enum Kind {
     Tasks,
     Privacy,
     Turbo,
+    /// System Optimization's registry tweaks.
+    Tweaks,
+    /// A Disk Optimization run (nothing to undo).
+    Disk,
     Other,
 }
 
@@ -148,6 +152,14 @@ pub fn parse(path: &Path, text: &str) -> Option<Entry> {
                 format!("Moved {} to the Recycle Bin", plural(n, "item")),
             )
         }
+        "tweaks" => {
+            let n = end.map_or(body("W	").count() as u64, |e| tally(e, "applied=").0);
+            (Kind::Tweaks, format!("Applied {}", plural(n, "tweak")))
+        }
+        "optimize" => {
+            let n = end.map_or(0, |e| tally(e, "optimized=").0);
+            (Kind::Disk, format!("Optimized {}", plural(n, "drive")))
+        }
         "turbo" => {
             let on = field(header.copied().unwrap_or(""), 2) == "on";
             title = "Turbo Boost".into();
@@ -214,7 +226,7 @@ pub fn parse(path: &Path, text: &str) -> Option<Entry> {
         Undo::None
     } else {
         match kind {
-            Kind::Clean | Kind::Other => Undo::None,
+            Kind::Clean | Kind::Disk | Kind::Other => Undo::None,
             Kind::Recycle => Undo::RecycleBin,
             Kind::Registry if body("B\t").next().is_none() => Undo::None,
             Kind::Turbo if field(header.copied().unwrap_or(""), 2) != "on" => Undo::None,
@@ -398,7 +410,14 @@ pub fn restore(e: &Entry, dir: &Path) -> io::Result<()> {
         Kind::Turbo => {
             crate::turbo::restore(dir)?;
         }
-        Kind::Clean | Kind::Recycle | Kind::Other => unreachable!("undo is None for these"),
+        Kind::Tweaks => {
+            for l in lines(e, "W	")? {
+                crate::tweaks::restore_line(&l)?;
+            }
+        }
+        Kind::Clean | Kind::Recycle | Kind::Disk | Kind::Other => {
+            unreachable!("undo is None for these")
+        }
     }
     mark(e)
 }

@@ -2,7 +2,9 @@
 
 pub mod apps;
 pub mod clean;
+pub mod disks;
 pub mod drivers;
+pub mod elevate;
 pub mod extensions;
 pub mod finder;
 pub mod format;
@@ -21,4 +23,5 @@ pub mod shortcuts;
 pub mod startup;
 pub mod tasks;
 pub mod turbo;
+pub mod tweaks;
 pub mod updater;

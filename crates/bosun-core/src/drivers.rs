@@ -4,7 +4,7 @@
 //! updates), which we open.
 
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
 };
 use windows::Win32::System::UpdateAgent::{IUpdateSession, IWindowsDriverUpdate, UpdateSession};
 use windows::core::{BSTR, Interface};
@@ -42,7 +42,8 @@ pub fn ole_date(d: f64) -> String {
 pub fn search() -> windows::core::Result<Vec<Driver>> {
     // SAFETY: COM calls on objects created here; strings are copied out.
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // multithreaded, like pending_updates: never wait on an unpumped STA
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let session: IUpdateSession = CoCreateInstance(&UpdateSession, None, CLSCTX_INPROC_SERVER)?;
         let searcher = session.CreateUpdateSearcher()?;
         let result = searcher.Search(&BSTR::from("IsInstalled=0 and Type='Driver'"))?;
@@ -67,6 +68,31 @@ pub fn search() -> windows::core::Result<Vec<Driver>> {
             });
         }
         Ok(out)
+    }
+}
+
+/// Titles of the software updates Windows Update has waiting (not drivers,
+/// not hidden ones). Slow: Windows Update checks online.
+pub fn pending_updates() -> windows::core::Result<Vec<String>> {
+    // SAFETY: COM calls on objects created here; strings are copied out.
+    unsafe {
+        // multithreaded: a blocking search in a single-threaded apartment waits on
+        // window messages a worker thread never pumps, and hangs
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let session: IUpdateSession = CoCreateInstance(&UpdateSession, None, CLSCTX_INPROC_SERVER)?;
+        let searcher = session.CreateUpdateSearcher()?;
+        let result = searcher.Search(&BSTR::from(
+            "IsInstalled=0 and IsHidden=0 and Type='Software'",
+        ))?;
+        let updates = result.Updates()?;
+        (0..updates.Count()?)
+            .map(|i| {
+                updates
+                    .get_Item(i)
+                    .and_then(|u| u.Title())
+                    .map(|t| t.to_string())
+            })
+            .collect()
     }
 }
 

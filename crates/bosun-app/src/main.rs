@@ -8,6 +8,7 @@ mod chrome;
 mod frame;
 mod icons;
 mod pages;
+mod scan;
 mod window;
 
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};

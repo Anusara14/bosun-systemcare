@@ -34,12 +34,39 @@ pub const CLASS: PCWSTR = w!("BosunMain");
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_NCMOUSELEAVE: u32 = 0x02A2;
 const SPIN_TIMER: usize = 1;
+/// Polls the scan worker (~30 fps) while a scan runs.
+const SCAN_TIMER: usize = 5;
 /// Test hook timers: with `BOSUN_HOVER_SCRIPT=1` the window replays the
 /// reference recording's hover (in, then out 1733 ms later, as in the
 /// recording) without a mouse, starting 1.5 s after launch,
 /// so the animation can be captured and compared frame by frame.
 const SCRIPT_IN: usize = 3;
 const SCRIPT_OUT: usize = 4;
+/// With `BOSUN_SCAN_SCRIPT=1` a scan starts 1.5 s after launch (capture hook).
+const SCRIPT_SCAN: usize = 6;
+/// With `BOSUN_MODE_SCRIPT=1` Manual mode is clicked 1.5 s after launch.
+const SCRIPT_MODE: usize = 7;
+
+/// `BOSUN_SCAN_SCRIPT=fix`: the capture hook also runs Fix, always as a dry run.
+fn script_fix() -> bool {
+    std::env::var_os("BOSUN_SCAN_SCRIPT").is_some_and(|v| v == "fix")
+}
+
+/// Fix walks and journals but deletes nothing (`BOSUN_FIX_DRYRUN=1`, or the
+/// capture hook).
+fn fix_dry_run() -> bool {
+    std::env::var_os("BOSUN_FIX_DRYRUN").is_some() || script_fix()
+}
+
+fn scripted() -> bool {
+    [
+        "BOSUN_HOVER_SCRIPT",
+        "BOSUN_SCAN_SCRIPT",
+        "BOSUN_MODE_SCRIPT",
+    ]
+    .iter()
+    .any(|v| std::env::var_os(v).is_some())
+}
 /// Default size in DIPs (the reference window).
 pub const DEFAULT_W: f32 = 960.0;
 pub const DEFAULT_H: f32 = 660.0;
@@ -65,6 +92,16 @@ pub enum Hit {
     Scan,
     Mode(Mode),
     ModeHelp,
+    ScanSkip,
+    ScanStop,
+    ScanBack,
+    ScanFix,
+    AutoFix,
+    /// A summary row (click ticks / unticks the module).
+    ScanRow(usize),
+    /// Manual mode: a module's tick box, or Select All.
+    Pick(usize),
+    PickAll,
 }
 
 impl Hit {
@@ -85,6 +122,13 @@ pub struct View {
     pub scan_hover: f32,
     /// (SCAN opacity, magnifier opacity), timed on the clock, not the easing.
     pub scan_label: (f32, f32),
+    /// The scan screen's state while a scan is shown (replaces the sidebar).
+    pub scan: Option<crate::scan::Progress>,
+    pub auto_fix: bool,
+    /// Manual mode's ticked modules (bit i = `scan::MODULES[i]`).
+    pub picks: u16,
+    /// Recommended (0) → Manual (1) layout, animated.
+    pub manual_t: f32,
     pub note: Option<&'static str>,
     pub maximized: bool,
 }
@@ -100,6 +144,15 @@ struct App {
     mode: Mode,
     scan_hover: f32,
     scan_label: (f32, f32),
+    scan: Option<crate::scan::Scan>,
+    auto_fix: bool,
+    /// Auto fix already chained a Fix onto this scan.
+    auto_ran: bool,
+    /// Manual mode's ticked modules (bit i = `scan::MODULES[i]`).
+    picks: u16,
+    manual_t: f32,
+    /// Running layout change between modes: (start, from, to).
+    mode_anim: Option<(Instant, f32, f32)>,
     /// Running hover transition: (start, from, to).
     anim: Option<(Instant, f32, f32)>,
     note: Option<(&'static str, Instant)>,
@@ -132,6 +185,10 @@ impl App {
             mode: self.mode,
             scan_hover: self.scan_hover,
             scan_label: self.scan_label,
+            scan: self.scan.as_ref().and_then(|s| s.snapshot()),
+            auto_fix: self.auto_fix,
+            picks: self.picks,
+            manual_t: self.manual_t,
             note: self
                 .note
                 .filter(|(_, at)| at.elapsed().as_secs() < 5)
@@ -191,6 +248,12 @@ pub fn create(page: Page) -> Result<()> {
                 mode: Mode::Recommended,
                 scan_hover: 0.0,
                 scan_label: (1.0, 0.0),
+                scan: None,
+                auto_fix: script_fix(),
+                auto_ran: false,
+                picks: crate::scan::ALL,
+                manual_t: 0.0,
+                mode_anim: None,
                 anim: None,
                 note: None,
             })
@@ -199,6 +262,12 @@ pub fn create(page: Page) -> Result<()> {
         if std::env::var_os("BOSUN_HOVER_SCRIPT").is_some() {
             SetTimer(Some(hwnd), SCRIPT_IN, 1500, None);
             SetTimer(Some(hwnd), SCRIPT_OUT, 3233, None);
+        }
+        if std::env::var_os("BOSUN_MODE_SCRIPT").is_some() {
+            SetTimer(Some(hwnd), SCRIPT_MODE, 1500, None);
+        }
+        if std::env::var_os("BOSUN_SCAN_SCRIPT").is_some() {
+            SetTimer(Some(hwnd), SCRIPT_SCAN, 1500, None);
         }
         set_icons(hwnd, hinst.into(), dpi);
         let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
@@ -285,6 +354,10 @@ struct Key {
     mode: Mode,
     scan_hover: f32,
     scan_label: (f32, f32),
+    scan: Option<crate::scan::Progress>,
+    auto_fix: bool,
+    picks: u16,
+    manual_t: f32,
     note: Option<&'static str>,
     maximized: bool,
 }
@@ -300,6 +373,10 @@ impl Key {
             mode: v.mode,
             scan_hover: v.scan_hover,
             scan_label: v.scan_label,
+            scan: v.scan.clone(),
+            auto_fix: v.auto_fix,
+            picks: v.picks,
+            manual_t: v.manual_t,
             note: v.note,
             maximized: v.maximized,
         }
@@ -462,15 +539,50 @@ fn click(hwnd: HWND, h: Hit) {
         _ => {
             with_app(|a| match h {
                 Hit::Nav(p) => a.page = p,
-                Hit::Mode(m) => a.mode = m,
+                Hit::Mode(m) if a.mode != m => {
+                    a.mode = m;
+                    let to = if m == Mode::Manual { 1.0 } else { 0.0 };
+                    a.mode_anim = Some((Instant::now(), a.manual_t, to));
+                    // SAFETY: ~60 fps timer on our own window, killed when idle.
+                    unsafe { SetTimer(Some(hwnd), SPIN_TIMER, 16, None) };
+                }
+                Hit::Pick(i) => a.picks ^= 1 << i,
+                Hit::PickAll => {
+                    a.picks = if a.picks == crate::scan::ALL {
+                        0
+                    } else {
+                        crate::scan::ALL
+                    }
+                }
                 Hit::Bell => {
                     a.note = Some(("You're all caught up: no notifications.", Instant::now()))
                 }
+                Hit::Scan if a.mode == Mode::Manual && a.picks == 0 => {
+                    a.note = Some(("Tick at least one module to scan.", Instant::now()));
+                }
                 Hit::Scan => {
-                    a.note = Some((
-                        "The scan engine arrives in the next build phase.",
-                        Instant::now(),
-                    ))
+                    a.auto_ran = false;
+                    let picks = match a.mode {
+                        Mode::Recommended => crate::scan::ALL,
+                        Mode::Manual => a.picks,
+                    };
+                    a.scan = Some(crate::scan::start(picks));
+                    a.hover = Hit::None;
+                    // SAFETY: poll timer on our own window, killed when the scan ends.
+                    unsafe { SetTimer(Some(hwnd), SCAN_TIMER, 33, None) };
+                }
+                Hit::ScanSkip => a.scan.iter().for_each(|s| s.skip()),
+                Hit::ScanStop => a.scan.iter().for_each(|s| s.stop()),
+                Hit::ScanBack => a.scan = None,
+                Hit::AutoFix => a.auto_fix = !a.auto_fix,
+                Hit::ScanRow(i) => a.scan.iter().for_each(|s| s.toggle(i)),
+                Hit::ScanFix => {
+                    if a.scan.as_ref().is_some_and(|s| s.fix(fix_dry_run())) {
+                        // SAFETY: poll timer on our own window, killed when the fix ends.
+                        unsafe { SetTimer(Some(hwnd), SCAN_TIMER, 33, None) };
+                    } else {
+                        a.note = Some(("Tick at least one module to fix.", Instant::now()));
+                    }
                 }
                 Hit::ModeHelp => {
                     a.note = Some((
@@ -501,10 +613,30 @@ pub fn hover_ease(t: f32) -> f32 {
     0.5 * t + 0.5 * t * t * (3.0 - 2.0 * t)
 }
 
+/// Mode switch layout change, measured: ease-out over 250 ms (54 % and 91 %
+/// of the way at the first two recorded frames).
+const MODE_SECS: f32 = 0.25;
+
+pub fn mode_ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t) * (1.0 - t)
+}
+
 fn on_timer(hwnd: HWND) {
     let done = with_app(|a| {
+        let mode_done = match a.mode_anim {
+            Some((at, from, to)) => {
+                let t = (at.elapsed().as_secs_f32() / MODE_SECS).min(1.0);
+                a.manual_t = from + (to - from) * mode_ease(t);
+                if t >= 1.0 {
+                    a.mode_anim = None;
+                }
+                t >= 1.0
+            }
+            None => true,
+        };
         let Some((at, from, to)) = a.anim else {
-            return true;
+            return mode_done;
         };
         let t = (at.elapsed().as_secs_f32() / HOVER_SECS).min(1.0);
         let eased = hover_ease(t);
@@ -513,7 +645,7 @@ fn on_timer(hwnd: HWND) {
         if t >= 1.0 {
             a.anim = None;
         }
-        t >= 1.0
+        t >= 1.0 && mode_done
     });
     if done != Some(false) {
         // SAFETY: our own timer.
@@ -569,9 +701,7 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             return LRESULT(0);
         }
         // The hover replay owns the pointer state; ignore the real mouse meanwhile.
-        WM_MOUSEMOVE | WM_MOUSELEAVE | WM_NCMOUSELEAVE
-            if std::env::var_os("BOSUN_HOVER_SCRIPT").is_some() =>
-        {
+        WM_MOUSEMOVE | WM_MOUSELEAVE | WM_NCMOUSELEAVE if scripted() => {
             return LRESULT(0);
         }
         WM_MOUSEMOVE => {
@@ -631,6 +761,36 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             }
         }
         WM_TIMER if wp.0 == SPIN_TIMER => on_timer(hwnd),
+        WM_TIMER if wp.0 == SCAN_TIMER => {
+            let done = with_app(|a| {
+                let Some(p) = a.scan.as_ref().and_then(|s| s.snapshot()) else {
+                    return true;
+                };
+                // Auto fix: go straight from the summary into Fix, once.
+                if p.is_summary() && a.auto_fix && !a.auto_ran {
+                    a.auto_ran = true;
+                    if a.scan.as_ref().is_some_and(|s| s.fix(fix_dry_run())) {
+                        return false;
+                    }
+                }
+                p.finished
+            });
+            if done != Some(false) {
+                // SAFETY: our own timer.
+                let _ = unsafe { KillTimer(Some(hwnd), SCAN_TIMER) };
+            }
+            invalidate(hwnd);
+        }
+        WM_TIMER if wp.0 == SCRIPT_MODE => {
+            // SAFETY: one-shot test-hook timer on our own window.
+            let _ = unsafe { KillTimer(Some(hwnd), wp.0) };
+            click(hwnd, Hit::Mode(Mode::Manual));
+        }
+        WM_TIMER if wp.0 == SCRIPT_SCAN => {
+            // SAFETY: one-shot test-hook timer on our own window.
+            let _ = unsafe { KillTimer(Some(hwnd), wp.0) };
+            click(hwnd, Hit::Scan);
+        }
         WM_TIMER if wp.0 == SCRIPT_IN || wp.0 == SCRIPT_OUT => {
             // SAFETY: one-shot test-hook timer on our own window.
             let _ = unsafe { KillTimer(Some(hwnd), wp.0) };
@@ -664,9 +824,38 @@ pub fn screen_to_dip(hwnd: HWND, pt: POINT) -> (f32, f32) {
     }
 }
 
+/// A default-size Care view for layout tests.
+#[cfg(test)]
+pub fn test_view() -> View {
+    View {
+        page: Page::Care,
+        w: DEFAULT_W,
+        h: DEFAULT_H,
+        hover: Hit::None,
+        pressed: Hit::None,
+        mode: Mode::Recommended,
+        scan_hover: 0.0,
+        scan_label: (1.0, 0.0),
+        scan: None,
+        auto_fix: false,
+        picks: crate::scan::ALL,
+        manual_t: 0.0,
+        note: None,
+        maximized: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::hover_ease;
+
+    #[test]
+    fn mode_easing_tracks_the_reference_samples() {
+        // 54 % and 91 % at the first two recorded frames (≈ 0.33 and 0.73 of 250 ms)
+        assert!((super::mode_ease(0.33) - 0.54).abs() < 0.06);
+        assert!((super::mode_ease(0.73) - 0.91).abs() < 0.05);
+        assert_eq!(super::mode_ease(1.0), 1.0);
+    }
 
     #[test]
     fn hover_easing_tracks_the_reference_samples() {

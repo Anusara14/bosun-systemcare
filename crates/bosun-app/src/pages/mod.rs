@@ -2,6 +2,7 @@
 
 pub mod care;
 mod placeholder;
+pub mod scan;
 
 use bosun_ui::gfx::Painter;
 
@@ -48,6 +49,9 @@ impl Page {
 }
 
 pub fn draw(p: &Painter, v: &View) {
+    if let Some(s) = &v.scan {
+        return scan::draw(p, v, s);
+    }
     match v.page {
         Page::Care => care::draw(p, v),
         other => placeholder::draw(p, v, other),
@@ -55,6 +59,9 @@ pub fn draw(p: &Painter, v: &View) {
 }
 
 pub fn hit(v: &View, x: f32, y: f32) -> Hit {
+    if let Some(s) = &v.scan {
+        return scan::hit(v, s, x, y);
+    }
     match v.page {
         Page::Care => care::hit(v, x, y),
         _ => Hit::None,

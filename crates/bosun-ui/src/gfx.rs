@@ -15,11 +15,11 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-    DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TRIMMING,
-    DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
-    IDWriteFactory, IDWriteTextFormat,
+    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_WEIGHT_NORMAL,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+    DWRITE_TEXT_ALIGNMENT, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWRITE_TRIMMING, DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
 };
 use windows::Win32::Graphics::Imaging::{
     CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
@@ -109,6 +109,12 @@ pub struct Fonts {
     pub h1: IDWriteTextFormat,
     pub m13sb: IDWriteTextFormat,
     pub m14sb: IDWriteTextFormat,
+    /// Scan screen (reference cap heights: heading 15, title 15, % digits 50).
+    pub s_head: IDWriteTextFormat,
+    pub s_title: IDWriteTextFormat,
+    pub s_pct: IDWriteTextFormat,
+    pub s_sign: IDWriteTextFormat,
+    pub s_size: IDWriteTextFormat,
 }
 
 pub struct Gfx {
@@ -179,6 +185,11 @@ impl Gfx {
                 m13sb: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?,
                 m14sb: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.0)?,
                 h1: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 20.0)?,
+                s_head: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 22.0)?,
+                s_title: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_NORMAL, 21.0)?,
+                s_pct: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_LIGHT, 72.0)?,
+                s_sign: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_LIGHT, 20.0)?,
+                s_size: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 17.0)?,
             };
             Ok(Self {
                 d2d,

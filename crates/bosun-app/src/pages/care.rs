@@ -18,6 +18,8 @@ use bosun_ui::gfx::{Align, Painter, col, cola, contains, mix, rect};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 
 use crate::chrome::SIDEBAR_W;
+use crate::pages::scan::checkbox;
+use crate::scan::{ALL, MODULES};
 use crate::window::{DEFAULT_H, Hit, Mode, View};
 
 const R_RIM: f32 = 127.0;
@@ -33,11 +35,25 @@ const SWITCH_H: f32 = 45.0;
 const SWITCH_DY: f32 = 200.0;
 const PILL_W: f32 = 121.0;
 const PILL_H: f32 = 38.0;
+/// Manual mode, measured from the reference recording (`.reanimate/manual`):
+/// the dial rises 45 px and the switch closes up 40.5 px more; below it a
+/// "Select All" row and a 4-column grid of 16 px tick boxes (columns 182 px
+/// apart from 363.5 px left of the dial, rows 35 px apart), labels 26 px
+/// right of the box, 13 px.
+const MANUAL_RISE: f32 = 45.0;
+const SWITCH_CLOSE_UP: f32 = 40.5;
+const GRID_X: f32 = -363.5;
+const GRID_COL: f32 = 182.0;
+const GRID_ROW: f32 = 35.0;
+const SELECT_ALL_DY: f32 = 217.5;
+const BOX: f32 = 16.0;
 
 /// Dial centre: 3 px left of the content centre (as measured); it drifts down
 /// proportionally when the window is taller than the reference.
+/// In Manual mode the dial rises 45 px (measured) to make room for the grid.
 pub fn center(v: &View) -> (f32, f32) {
-    center_for(v.w, v.h)
+    let (cx, cy) = center_for(v.w, v.h);
+    (cx, cy - MANUAL_RISE * v.manual_t)
 }
 
 /// Dial centre for a window of `w` × `h` DIPs.
@@ -49,7 +65,8 @@ pub fn center_for(w: f32, h: f32) -> (f32, f32) {
 
 fn switch_rect(v: &View) -> D2D_RECT_F {
     let (cx, cy) = center(v);
-    rect(cx - SWITCH_W / 2.0, cy + SWITCH_DY, SWITCH_W, SWITCH_H)
+    let dy = SWITCH_DY - SWITCH_CLOSE_UP * v.manual_t;
+    rect(cx - SWITCH_W / 2.0, cy + dy, SWITCH_W, SWITCH_H)
 }
 
 fn halves(v: &View) -> [(Mode, D2D_RECT_F); 2] {
@@ -71,7 +88,79 @@ fn help_badge(v: &View) -> (f32, f32, f32) {
     (s.left + 8.0, s.top + 6.0, 7.5)
 }
 
+/// Top-left of tick box `i` (`None` = Select All), relative to the dial.
+fn pick_box(v: &View, i: Option<usize>) -> (f32, f32) {
+    let (cx, cy) = center(v);
+    let (col, row) = match i {
+        None => (0, 0),
+        Some(i) => (i % 4, i / 4 + 1),
+    };
+    (
+        cx + GRID_X + GRID_COL * col as f32,
+        cy + SELECT_ALL_DY + GRID_ROW * row as f32,
+    )
+}
+
+fn pick_hit(v: &View, x: f32, y: f32) -> Option<Hit> {
+    if v.manual_t < 0.99 {
+        return None;
+    }
+    let over = |i| {
+        let (bx, by) = pick_box(v, i);
+        contains(&rect(bx - 2.0, by - 4.0, 160.0, BOX + 8.0), x, y)
+    };
+    if over(None) {
+        return Some(Hit::PickAll);
+    }
+    (0..MODULES.len()).find(|&i| over(Some(i))).map(Hit::Pick)
+}
+
+fn draw_picks(p: &Painter, v: &View) {
+    let a = v.manual_t;
+    if a <= 0.0 {
+        return;
+    }
+    let row = |label: &str, i: Option<usize>, on: bool, hot: bool| {
+        let (bx, by) = pick_box(v, i);
+        let (cx, cy) = (bx + BOX / 2.0, by + BOX / 2.0);
+        if on {
+            checkbox(p, cx, cy, true, a);
+        } else {
+            p.stroke_rr(
+                rect(bx + 0.5, by + 0.5, BOX - 1.0, BOX - 1.0),
+                2.5,
+                1.0,
+                cola(0x4C4C4C, a),
+            );
+        }
+        let c = match (on, hot) {
+            (_, true) => 0xFFFFFF,
+            (true, false) => 0xD6D6D6,
+            (false, false) => 0x8C8C8C,
+        };
+        p.text(
+            label,
+            &p.g.f.m13,
+            rect(bx + 26.0, cy - 10.0, 150.0, 20.0),
+            cola(c, a),
+            Align::Left,
+        );
+    };
+    row("Select All", None, v.picks == ALL, v.hover == Hit::PickAll);
+    for (i, m) in MODULES.iter().enumerate() {
+        row(
+            m.pick,
+            Some(i),
+            v.picks & (1 << i) != 0,
+            v.hover == Hit::Pick(i),
+        );
+    }
+}
+
 pub fn hit(v: &View, x: f32, y: f32) -> Hit {
+    if let Some(h) = pick_hit(v, x, y) {
+        return h;
+    }
     let (cx, cy) = center(v);
     if (x - cx).hypot(y - cy) <= R_RIM {
         return Hit::Scan;
@@ -256,6 +345,7 @@ fn draw_switch(p: &Painter, v: &View) {
 pub fn draw(p: &Painter, v: &View) {
     draw_dial(p, v);
     draw_switch(p, v);
+    draw_picks(p, v);
 }
 
 #[cfg(test)]
@@ -273,6 +363,10 @@ mod tests {
             mode: Mode::Recommended,
             scan_hover: 0.0,
             scan_label: (1.0, 0.0),
+            scan: None,
+            auto_fix: false,
+            picks: crate::scan::ALL,
+            manual_t: 0.0,
             note: None,
             maximized: false,
         }
@@ -303,6 +397,33 @@ mod tests {
     #[test]
     fn dial_sits_where_the_reference_has_it() {
         assert_eq!(center(&view(960.0, 660.0)), (553.0, 252.0));
+    }
+
+    #[test]
+    fn manual_layout_matches_the_reference() {
+        let mut v = view(960.0, 660.0);
+        v.manual_t = 1.0;
+        v.mode = Mode::Manual;
+        assert_eq!(center(&v), (553.0, 207.0));
+        let s = switch_rect(&v);
+        // pill centre sits 182 px below the dial in Manual (vs 222.5 at rest)
+        assert_eq!(s.top + SWITCH_H / 2.0, 207.0 + 182.0);
+        assert_eq!(pick_box(&v, None), (553.0 - 363.5, 207.0 + 217.5));
+        assert_eq!(
+            pick_box(&v, Some(5)),
+            (553.0 - 363.5 + 182.0, 207.0 + 217.5 + 70.0)
+        );
+        assert_eq!(hit(&v, 553.0 - 360.0, 207.0 + 225.0), Hit::PickAll);
+        assert_eq!(
+            hit(&v, 553.0 - 360.0 + 182.0 * 3.0, 207.0 + 260.0),
+            Hit::Pick(3)
+        );
+        v.manual_t = 0.5;
+        assert_eq!(
+            hit(&v, 553.0 - 360.0, 207.0 + 225.0),
+            Hit::None,
+            "not while sliding"
+        );
     }
 
     #[test]

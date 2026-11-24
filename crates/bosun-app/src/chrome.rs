@@ -61,6 +61,9 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
             .find(|(_, cx)| contains(&button_rect(*cx), x, y))
             .map_or(Hit::None, |(h, _)| h);
     }
+    if v.scan.is_some() {
+        return Hit::None;
+    }
     ALL.iter()
         .enumerate()
         .find(|(i, _)| contains(&item_rect(*i), x, y))
@@ -68,7 +71,9 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
 }
 
 pub fn draw(p: &Painter, v: &View) {
-    draw_sidebar(p, v);
+    if v.scan.is_none() {
+        draw_sidebar(p, v);
+    }
     draw_title(p, v);
 }
 
@@ -108,14 +113,30 @@ fn draw_sidebar(p: &Painter, v: &View) {
 
 fn draw_title(p: &Painter, v: &View) {
     let f = &p.g.f;
-    let content = rect(SIDEBAR_W, 0.0, v.w - SIDEBAR_W, TITLE_H - 2.0);
-    p.text(
-        "Bosun SystemCare",
-        &f.m13,
-        content,
-        col(cc::TEXT_2),
-        Align::Center,
-    );
+    if v.scan.is_some() {
+        // Scanning: the title moves to the left edge and names the mode.
+        let mode = match v.mode {
+            crate::window::Mode::Recommended => "Recommended",
+            crate::window::Mode::Manual => "Manual",
+        };
+        let t = format!("Bosun SystemCare - {mode}");
+        p.text(
+            &t,
+            &f.m13,
+            rect(14.0, 0.0, 400.0, TITLE_H - 4.0),
+            col(cc::TEXT_2),
+            Align::Left,
+        );
+    } else {
+        let content = rect(SIDEBAR_W, 0.0, v.w - SIDEBAR_W, TITLE_H - 2.0);
+        p.text(
+            "Bosun SystemCare",
+            &f.m13,
+            content,
+            col(cc::TEXT_2),
+            Align::Center,
+        );
+    }
     for (h, cx) in buttons(v.w) {
         let r = button_rect(cx);
         let hovered = v.hover == h;
@@ -237,6 +258,10 @@ mod tests {
             mode: Mode::Recommended,
             scan_hover: 0.0,
             scan_label: (1.0, 0.0),
+            scan: None,
+            auto_fix: false,
+            picks: crate::scan::ALL,
+            manual_t: 0.0,
             note: None,
             maximized: false,
         }

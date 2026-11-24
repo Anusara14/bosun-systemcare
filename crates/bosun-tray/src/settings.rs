@@ -14,6 +14,8 @@ pub struct Settings {
     /// Auto Clean: junk files once a day, and when it last ran (unix secs).
     pub auto_clean: bool,
     pub auto_clean_last: u64,
+    /// Turn Turbo Boost on when the tray starts (at Windows startup).
+    pub turbo_at_startup: bool,
 }
 
 impl Default for Settings {
@@ -26,6 +28,7 @@ impl Default for Settings {
             widget_transparent: false,
             auto_clean: false,
             auto_clean_last: 0,
+            turbo_at_startup: false,
         }
     }
 }
@@ -62,6 +65,7 @@ impl Settings {
                 "widget_transparent" => s.widget_transparent = v.trim() == "1",
                 "auto_clean" => s.auto_clean = v.trim() == "1",
                 "auto_clean_last" => s.auto_clean_last = v.trim().parse().unwrap_or(0),
+                "turbo_at_startup" => s.turbo_at_startup = v.trim() == "1",
                 "widget_x" => x = v.trim().parse().ok(),
                 "widget_y" => y = v.trim().parse().ok(),
                 _ => {}
@@ -80,9 +84,10 @@ impl Settings {
             u8::from(self.widget_transparent)
         );
         out.push_str(&format!(
-            "auto_clean={}\nauto_clean_last={}\n",
+            "auto_clean={}\nauto_clean_last={}\nturbo_at_startup={}\n",
             u8::from(self.auto_clean),
-            self.auto_clean_last
+            self.auto_clean_last,
+            u8::from(self.turbo_at_startup)
         ));
         if let Some((x, y)) = self.widget_pos {
             out.push_str(&format!("widget_x={x}\nwidget_y={y}\n"));
@@ -120,6 +125,7 @@ mod tests {
             widget_transparent: true,
             auto_clean: true,
             auto_clean_last: 1_795_000_000,
+            turbo_at_startup: true,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

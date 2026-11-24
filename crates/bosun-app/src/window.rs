@@ -188,6 +188,7 @@ pub enum Hit {
     TurboTab(u8),
     TurboGo,
     TurboPower,
+    TurboStartup,
     TurboRecommend,
     TurboTick(Option<usize>),
     TurboModeCard,
@@ -1068,6 +1069,15 @@ fn click(hwnd: HWND, h: Hit) {
                 Hit::TurboTick(i) => a.turbo.iter_mut().for_each(|x| x.toggle(i)),
                 Hit::TurboRecommend => a.turbo.iter_mut().for_each(|x| x.recommend()),
                 Hit::TurboPower => a.turbo.iter_mut().for_each(|x| x.power = !x.power),
+                Hit::TurboStartup => {
+                    if let Some(t) = a.turbo.as_mut() {
+                        if crate::tray_ini::set("turbo_at_startup", !t.startup).is_ok() {
+                            t.startup = !t.startup;
+                        } else {
+                            a.note = Some(("Couldn't save the setting.", Instant::now()));
+                        }
+                    }
+                }
                 Hit::TurboGo => {
                     if let Some(t) = a.turbo.take() {
                         a.note =

@@ -9,6 +9,7 @@
 //! | table           | x 57–896, y 223–563; header cap centre 237; rows 40 apart from 272 |
 //! | Recommended     | link x 72, cap centre 549.5                                 |
 //! | power plan box  | box centre (65.5, 592), text x 83                           |
+//! | at-startup box  | ours, 28 px below the power plan box (the spec's option)   |
 //! | Boost           | 141 × 30 at (755, 586)                                      |
 
 use bosun_core::turbo::Mode;
@@ -53,6 +54,8 @@ pub struct TurboView {
     pub tab: u8,
     pub rows: Vec<TRow>,
     pub power: bool,
+    /// Turbo Boost turns on when the tray starts (saved at once in tray.ini).
+    pub startup: bool,
     pub scroll: f32,
 }
 
@@ -61,6 +64,7 @@ pub struct Turbo {
     pub mode: Mode,
     pub tab: u8,
     pub power: bool,
+    pub startup: bool,
     pub scroll: f32,
     /// (internal name, display name, description, ticked)
     pub system: Vec<(String, String, String, bool)>,
@@ -104,6 +108,7 @@ impl Turbo {
             mode,
             tab: 0,
             power: true,
+            startup: crate::tray_ini::get("turbo_at_startup", false),
             scroll: 0.0,
             system,
             other,
@@ -150,6 +155,7 @@ impl Turbo {
             tab: self.tab,
             rows,
             power: self.power,
+            startup: self.startup,
             scroll: self.scroll,
         }
     }
@@ -282,6 +288,9 @@ pub fn hit(_v: &View, t: &TurboView, x: f32, y: f32) -> Hit {
     }
     if contains(&rect(57.0, 581.0, 460.0, 22.0), x, y) {
         return Hit::TurboPower;
+    }
+    if contains(&rect(57.0, 609.0, 460.0, 22.0), x, y) {
+        return Hit::TurboStartup;
     }
     if contains(&rect(70.0, 539.0, 100.0, 20.0), x, y) {
         return Hit::TurboRecommend;
@@ -491,6 +500,14 @@ pub fn draw(p: &Painter, v: &View, t: &TurboView) {
         tc::TEXT
     };
     text_at(p, &label, &f.m13, 13.0, 83.0, 460.0, 592.0, lc);
+    crate::pages::scan::checkbox(p, 65.5, 620.0, t.startup, 1.0);
+    let sc = if v.hover == Hit::TurboStartup {
+        0xFFFFFF
+    } else {
+        tc::TEXT
+    };
+    let startup = "Turn on Turbo Boost when Windows starts (Recommended plan)";
+    text_at(p, startup, &f.m13, 13.0, 83.0, 460.0, 620.0, sc);
     let b = boost_button();
     let x = (b.left + b.right) / 2.0;
     let stops = [(0.0, col(0x8DC3F8)), (1.0, col(0x6DB4F7))];

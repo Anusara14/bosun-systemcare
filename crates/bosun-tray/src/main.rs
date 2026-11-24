@@ -458,6 +458,12 @@ fn run() -> Result<()> {
 
         let settings = Settings::load();
         let widget_visible = settings.widget_visible;
+        // Turbo Boost at startup: on a worker, since stopping services takes a moment
+        if settings.turbo_at_startup && !tools::turbo_on() {
+            std::thread::spawn(|| {
+                let _ = tools::toggle_turbo();
+            });
+        }
         let sampler = VitalsSampler::new();
         let table = ProcessTable::new();
         STATE.with(|s| {

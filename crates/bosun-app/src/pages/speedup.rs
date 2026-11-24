@@ -31,7 +31,7 @@ mod sp {
     pub const CARD: u32 = 0x1C1C1C;
     pub const TITLE: u32 = 0xF2F2F2;
     pub const TEXT: u32 = 0xB8B8B8;
-    pub const ICON: u32 = 0xD4D4D4;
+
     pub const ORANGE: u32 = 0xF5A56A;
     pub const BLUE: u32 = 0x61ADF8;
     pub const LINE: u32 = 0x2C2C2C;
@@ -82,6 +82,20 @@ fn toggle(c: &D2D_RECT_F, row: usize) -> D2D_RECT_F {
 }
 
 pub fn hit(v: &View, x: f32, y: f32) -> Hit {
+    let tc = card(v, 5);
+    for k in 0..5 {
+        let cx = tc.left + 95.0 + 22.5 + 43.0 * k as f32;
+        if (x - cx).hypot(y - (tc.top + 117.0)) <= 17.0 {
+            // Disk Cleaner, Large File Finder, Empty Folder Finder, Shortcut Fixer, more
+            return [
+                Hit::Tool(12),
+                Hit::Tool(15),
+                Hit::Tool(13),
+                Hit::Tool(14),
+                Hit::ToolsOpen,
+            ][k];
+        }
+    }
     let b0 = button(&card(v, 0));
     if contains(&rect(b0.right - 32.0, b0.top, 32.0, BTN_H), x, y) {
         return Hit::TurboModeCard;
@@ -241,7 +255,7 @@ pub fn draw(p: &Painter, v: &View) {
             i,
             c.left + 49.5,
             c.top + 42.5,
-            i <= 1 && (i == 0 || opt > 0),
+            (i == 0 && !s.turbo_on) || (i == 1 && opt > 0),
         );
         let tx = c.left + 95.0;
         draw_title(p, title, tx, c.top + 27.0);
@@ -297,6 +311,23 @@ pub fn draw(p: &Painter, v: &View) {
     }
     draw_tuneup(p, v, &card(v, 4));
     draw_tools(p, &card(v, 5));
+    // hover ring on the tools row
+    let tc = card(v, 5);
+    for (k, h) in [
+        Hit::Tool(12),
+        Hit::Tool(15),
+        Hit::Tool(13),
+        Hit::Tool(14),
+        Hit::ToolsOpen,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if v.hover == h {
+            let cx = tc.left + 95.0 + 22.5 + 43.0 * k as f32;
+            p.circle(cx, tc.top + 117.0, 16.0, cola(0xFFFFFF, 0.08));
+        }
+    }
 }
 
 /// "Turbo Boost: OFF" draws "OFF" in orange.
@@ -361,7 +392,9 @@ fn draw_tuneup(p: &Painter, v: &View, c: &D2D_RECT_F) {
     }
 }
 
-/// Round tool buttons along the card's bottom (inactive until their tools land).
+/// The More Optimization Tools row: blue rings with blue glyphs, as in the
+/// reference (its PRO tags are dropped). Ours: Disk Cleaner, Large File
+/// Finder, Empty Folder Finder, Shortcut Fixer, then "more".
 fn draw_tools(p: &Painter, c: &D2D_RECT_F) {
     let tx = c.left + 95.0;
     p.line(
@@ -372,117 +405,206 @@ fn draw_tools(p: &Painter, c: &D2D_RECT_F) {
         1.0,
         col(sp::LINE),
     );
+    let blue = col(sp::BLUE);
+    let w = 1.8;
     for k in 0..5 {
-        let cx = tx + 6.0 + 16.5 + 43.0 * k as f32;
+        let cx = tx + 22.5 + 43.0 * k as f32;
         let cy = c.top + 117.0;
-        p.ring(cx, cy, 16.0, 1.6, col(0x3E3E3E));
         if k == 4 {
+            p.ring(cx, cy, 16.0, 1.8, col(0x6E6E6E));
             for d in [-6.0, 0.0, 6.0] {
-                p.circle(cx + d, cy, 1.6, col(sp::TEXT));
+                p.circle(cx + d, cy, 1.9, col(0xC8C8C8));
             }
-        } else {
-            p.ring(cx, cy, 7.0, 1.6, col(0x5A5A5A));
+            continue;
+        }
+        p.ring(cx, cy, 16.0, 1.8, blue);
+        match k {
+            // Disk Cleaner: a drive with a light
+            0 => {
+                p.stroke_rr(rect(cx - 9.0, cy - 6.0, 18.0, 12.0), 2.0, w, blue);
+                p.line(cx - 9.0, cy + 1.5, cx + 9.0, cy + 1.5, w, blue);
+                p.circle(cx + 5.0, cy + 3.8, 1.2, blue);
+            }
+            // Large File Finder: a page and a magnifier
+            1 => {
+                p.stroke_rr(rect(cx - 8.0, cy - 9.0, 11.0, 15.0), 1.5, w, blue);
+                p.ring(cx + 3.5, cy + 2.5, 4.0, w, blue);
+                p.line(cx + 6.4, cy + 5.4, cx + 9.0, cy + 8.0, 2.0, blue);
+            }
+            // Empty Folder Finder: a folder
+            2 => {
+                p.fill_poly(
+                    &[
+                        (cx - 9.0, cy - 6.0),
+                        (cx - 3.0, cy - 6.0),
+                        (cx - 1.0, cy - 4.0),
+                        (cx - 9.0, cy - 4.0),
+                    ],
+                    blue,
+                );
+                p.stroke_rr(rect(cx - 9.0, cy - 4.0, 18.0, 11.0), 1.5, w, blue);
+            }
+            // Shortcut Fixer: a window with a tick (reference glyph)
+            _ => {
+                p.stroke_rr(rect(cx - 9.0, cy - 7.0, 16.0, 13.0), 1.5, w, blue);
+                p.line(cx - 9.0, cy - 3.5, cx + 7.0, cy - 3.5, w, blue);
+                p.line(cx + 1.0, cy + 4.0, cx + 4.0, cy + 7.0, 2.0, blue);
+                p.line(cx + 4.0, cy + 7.0, cx + 10.0, cy + 0.5, 2.0, blue);
+            }
         }
     }
 }
 
-/// 43 px line icons, centred on (cx, cy); `badge` adds the orange "i".
-fn icon(p: &Painter, i: usize, cx: f32, cy: f32, badge: bool) {
-    let c = col(sp::ICON);
-    let w = 2.4;
+/// Orange "i" badge (attention) or blue tick badge (all good), as in the
+/// reference: 7 px radius, bottom-right of the icon.
+fn badge(p: &Painter, x: f32, y: f32, ok: bool) {
+    let k = col(0x141414);
+    if ok {
+        p.circle(x, y, 7.0, col(sp::BLUE));
+        p.line(x - 3.2, y + 0.2, x - 1.0, y + 2.6, 1.8, k);
+        p.line(x - 1.0, y + 2.6, x + 3.4, y - 2.4, 1.8, k);
+    } else {
+        p.circle(x, y, 7.0, col(sp::ORANGE));
+        p.circle(x, y - 3.0, 1.1, k);
+        p.line(x, y - 0.6, x, y + 3.6, 1.9, k);
+    }
+}
+
+/// Card icons, drawn in the reference's 60 × 60 box (origin card + (20, 12)),
+/// measured at 5× from `.reanimate/speedup/ref-icons.png`: a light main
+/// stroke with darker accents. `cx, cy` is the box centre.
+fn icon(p: &Painter, i: usize, cx: f32, cy: f32, attention: bool) {
+    let (ox, oy) = (cx - 29.5, cy - 30.5);
+    let at = |x: f32, y: f32| (ox + x, oy + y);
+    let c = col(0xD8D8DC);
+    let dim = col(0x787880);
+    let w = 1.9;
+    let line = |a: (f32, f32), b: (f32, f32), c, w| p.line(a.0, a.1, b.0, b.1, w, c);
+    let poly = |pts: &[(f32, f32)], c| {
+        for seg in pts.windows(2) {
+            line(at(seg[0].0, seg[0].1), at(seg[1].0, seg[1].1), c, w);
+        }
+    };
     match i {
-        // Turbo: gauge arc with a needle
+        // Turbo: gauge open at the bottom, dim inner arc, needle into a hub, base
         0 => {
-            p.arc_at(cx, cy + 2.0, 17.0, w, 0.625, 0.75, c);
-            p.line(cx, cy + 2.0, cx + 9.0, cy - 6.0, w, c);
-            p.circle(cx, cy + 2.0, 3.0, c);
-            p.line(cx - 7.0, cy + 15.0, cx + 7.0, cy + 15.0, w, c);
-        }
-        // Startup: rocket
-        1 => {
-            p.curve(
-                [
-                    (cx - 10.0, cy + 10.0),
-                    (cx - 6.0, cy - 6.0),
-                    (cx + 6.0, cy - 14.0),
-                    (cx + 16.0, cy - 16.0),
-                ],
-                w,
-                c,
-            );
-            p.curve(
-                [
-                    (cx - 10.0, cy + 10.0),
-                    (cx + 6.0, cy + 6.0),
-                    (cx + 14.0, cy - 6.0),
-                    (cx + 16.0, cy - 16.0),
-                ],
-                w,
-                c,
-            );
-            p.ring(cx + 6.0, cy - 6.0, 3.2, 2.0, c);
-            p.line(cx - 12.0, cy + 6.0, cx - 18.0, cy + 12.0, w, c);
-            p.line(cx - 6.0, cy + 12.0, cx - 12.0, cy + 18.0, w, c);
-        }
-        // Drivers: chip with pins
-        2 => {
-            p.stroke_rr(rect(cx - 11.0, cy - 15.0, 22.0, 30.0), 3.0, w, c);
-            p.ring(cx, cy, 5.5, w, c);
-            for d in [-8.0, 0.0, 8.0] {
-                p.line(cx - 15.0, cy + d, cx - 11.0, cy + d, w, c);
-                p.line(cx + 11.0, cy + d, cx + 15.0, cy + d, w, c);
+            let (gx, gy) = at(28.0, 29.0);
+            p.arc_at(gx, gy, 20.0, w, 0.67, 0.60, c);
+            p.arc_at(gx, gy, 13.0, 1.8, 0.75, 0.25, dim);
+            line(at(13.0, 29.0), at(24.5, 29.0), c, 3.6);
+            p.ring(gx, gy, 3.3, 1.8, c);
+            let (bx, by) = at(21.0, 41.0);
+            p.fill_rr(rect(bx, by, 13.0, 3.2), 1.6, dim);
+            if attention {
+                let (x, y) = at(45.0, 43.5);
+                badge(p, x, y, false);
             }
         }
-        // App cleaner: brush
+        // Startup: rocket pointing up-right, grey porthole, fins, motion dashes
+        1 => {
+            let (rx, ry) = at(31.0, 29.0);
+            let k = std::f32::consts::FRAC_1_SQRT_2;
+            // (u along the nose, v across) → screen
+            // 1.22× the first cut, to the reference's span (nose (52, 12) to fins)
+            let r = |u: f32, v: f32| (rx + 1.22 * (u + v) * k, ry + 1.22 * (-u + v) * k);
+            let body = [
+                r(21.0, 0.0),
+                r(13.0, 5.5),
+                r(-8.0, 6.0),
+                r(-11.0, 0.0),
+                r(-8.0, -6.0),
+                r(13.0, -5.5),
+                r(21.0, 0.0),
+            ];
+            for seg in body.windows(2) {
+                p.line(seg[0].0, seg[0].1, seg[1].0, seg[1].1, w, c);
+            }
+            for side in [1.0, -1.0] {
+                let f = [
+                    r(-2.0, 6.0 * side),
+                    r(-11.0, 13.0 * side),
+                    r(-9.0, 6.0 * side),
+                ];
+                for seg in f.windows(2) {
+                    p.line(seg[0].0, seg[0].1, seg[1].0, seg[1].1, w, c);
+                }
+            }
+            let (wx, wy) = r(7.0, 0.0);
+            p.ring(wx, wy, 3.4, 1.8, dim);
+            for (v, len) in [(-4.0, 3.5), (0.0, 5.0), (4.0, 3.5)] {
+                let a = r(-15.0, v);
+                let b = r(-15.0 - len, v);
+                p.line(a.0, a.1, b.0, b.1, 1.8, dim);
+            }
+            if attention {
+                let (x, y) = at(45.0, 43.5);
+                badge(p, x, y, false);
+            }
+        }
+        // Drivers / hardware: rounded box, four screws, double ring
+        2 => {
+            let (x0, y0) = at(11.5, 9.5);
+            p.stroke_rr(rect(x0, y0, 34.0, 38.0), 3.0, w, c);
+            for (sx, sy) in [(16.5, 14.5), (40.5, 14.5), (16.5, 42.5), (40.5, 42.5)] {
+                let (x, y) = at(sx, sy);
+                p.circle(x, y, 1.2, c);
+            }
+            let (rx, ry) = at(28.5, 28.5);
+            p.ring(rx, ry, 10.0, w, c);
+            p.ring(rx, ry, 4.0, 1.8, dim);
+        }
+        // App cleaner: brush with stem, ferrule and a flared, notched head
         3 => {
-            p.line(cx, cy - 17.0, cx, cy - 4.0, w, c);
-            p.stroke_rr(rect(cx - 8.0, cy - 5.0, 16.0, 6.0), 2.0, w, c);
-            p.curve(
-                [
-                    (cx - 9.0, cy + 1.0),
-                    (cx - 13.0, cy + 8.0),
-                    (cx - 14.0, cy + 13.0),
-                    (cx - 15.0, cy + 15.0),
+            let (sx, sy) = at(23.5, 10.0);
+            p.stroke_rr(rect(sx, sy, 9.0, 14.0), 4.0, w, c);
+            let (fx, fy) = at(15.0, 23.5);
+            p.stroke_rr(rect(fx, fy, 26.0, 5.0), 2.5, w, c);
+            poly(
+                &[
+                    (18.5, 28.5),
+                    (11.5, 42.5),
+                    (11.5, 47.0),
+                    (23.5, 47.0),
+                    (26.0, 42.0),
+                    (30.0, 42.0),
+                    (32.5, 47.0),
+                    (44.5, 47.0),
+                    (44.5, 42.5),
+                    (37.5, 28.5),
                 ],
-                w,
                 c,
             );
-            p.curve(
-                [
-                    (cx + 9.0, cy + 1.0),
-                    (cx + 13.0, cy + 8.0),
-                    (cx + 14.0, cy + 13.0),
-                    (cx + 15.0, cy + 15.0),
-                ],
-                w,
-                c,
-            );
-            p.line(cx - 15.0, cy + 15.0, cx + 15.0, cy + 15.0, w, c);
+            line(at(17.5, 36.0), at(16.5, 40.0), dim, 1.8);
         }
-        // Real-time: clock with a blue tick badge
+        // Real-time: clock with a gap for the blue tick badge
         4 => {
-            p.ring(cx, cy, 16.0, w, c);
-            p.line(cx, cy, cx, cy - 9.0, w, c);
-            p.line(cx, cy, cx + 6.0, cy + 4.0, w, c);
-            p.circle(cx + 13.0, cy + 13.0, 6.5, col(sp::BLUE));
-            let k = col(0x0A0A0A);
-            p.line(cx + 10.0, cy + 13.2, cx + 12.3, cy + 15.5, 1.6, k);
-            p.line(cx + 12.3, cy + 15.5, cx + 16.2, cy + 10.8, 1.6, k);
+            let (gx, gy) = at(28.0, 29.0);
+            p.arc_at(gx, gy, 18.5, w, 0.47, 0.85, c);
+            line(at(28.0, 29.0), at(28.0, 18.0), c, w);
+            line(at(28.0, 29.0), at(22.0, 33.0), c, w);
+            let (x, y) = at(44.0, 44.0);
+            badge(p, x, y, true);
         }
-        // More tools: toolbox
+        // More tools: toolbox with handle, divider and latch
         _ => {
-            p.stroke_rr(rect(cx - 17.0, cy - 8.0, 34.0, 24.0), 3.0, w, c);
-            p.stroke_rr(rect(cx - 7.0, cy - 15.0, 14.0, 7.0), 2.0, w, c);
-            p.line(cx - 17.0, cy + 2.0, cx + 17.0, cy + 2.0, w, c);
-            p.stroke_rr(rect(cx - 3.5, cy - 1.0, 7.0, 6.0), 1.5, 1.8, c);
+            let (bx, by) = at(10.0, 20.0);
+            p.stroke_rr(rect(bx, by, 37.0, 25.0), 3.0, w, c);
+            poly(
+                &[
+                    (20.5, 20.0),
+                    (20.5, 15.0),
+                    (22.5, 12.5),
+                    (34.5, 12.5),
+                    (36.5, 15.0),
+                    (36.5, 20.0),
+                ],
+                c,
+            );
+            line(at(10.0, 30.5), at(24.0, 30.5), dim, 1.8);
+            line(at(33.0, 30.5), at(47.0, 30.5), dim, 1.8);
+            let (lx, ly) = at(24.0, 26.0);
+            p.stroke_rr(rect(lx, ly, 9.0, 9.0), 2.0, w, c);
         }
-    }
-    if badge {
-        let (bx, by) = (cx + 13.0, cy + 13.0);
-        p.circle(bx, by, 6.5, col(sp::ORANGE));
-        let k = col(0x141414);
-        p.circle(bx, by - 2.8, 1.0, k);
-        p.line(bx, by - 0.8, bx, by + 3.2, 1.6, k);
     }
 }
 

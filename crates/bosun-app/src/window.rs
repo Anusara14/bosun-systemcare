@@ -36,6 +36,8 @@ const WM_NCMOUSELEAVE: u32 = 0x02A2;
 const SPIN_TIMER: usize = 1;
 /// Polls the scan worker (~30 fps) while a scan runs.
 const SCAN_TIMER: usize = 5;
+/// Polls the Windows Update driver search while it runs.
+const DRIVER_TIMER: usize = 8;
 /// Test hook timers: with `BOSUN_HOVER_SCRIPT=1` the window replays the
 /// reference recording's hover (in, then out 1733 ms later, as in the
 /// recording) without a mouse, starting 1.5 s after launch,
@@ -117,6 +119,8 @@ pub enum Hit {
     OptRescue,
     OptSystem,
     OptRemove(usize),
+    /// App Cleaner: sort Programs by name (0), size (1) or date (2).
+    OptSort(u8),
     /// Turbo Boost settings and the Speed Up card's split button.
     TurboMode,
     TurboTab(u8),
@@ -126,6 +130,9 @@ pub enum Hit {
     TurboTick(Option<usize>),
     TurboModeCard,
     TurboConfigure,
+    /// More Optimization Tools: a tool (see `pages::tools::COLUMNS`), or the window.
+    Tool(u8),
+    ToolsOpen,
 }
 
 impl Hit {
@@ -158,6 +165,8 @@ pub struct View {
     pub opt: Option<crate::pages::optimizer::OptView>,
     /// Turbo Boost settings, when open (also replaces the page and sidebar).
     pub turbo: Option<crate::pages::turbo::TurboView>,
+    /// The More Optimization Tools window is open.
+    pub tools: bool,
     pub note: Option<&'static str>,
     pub maximized: bool,
 }
@@ -183,6 +192,7 @@ struct App {
     speed: crate::pages::speedup::SpeedInfo,
     opt: Option<crate::pages::optimizer::Optimizer>,
     turbo: Option<crate::pages::turbo::Turbo>,
+    tools: bool,
     /// Running layout change between modes: (start, from, to).
     mode_anim: Option<(Instant, f32, f32)>,
     /// Running hover transition: (start, from, to).
@@ -224,6 +234,7 @@ impl App {
             speed: self.speed,
             opt: self.opt.as_ref().map(|o| o.view()),
             turbo: self.turbo.as_ref().map(|t| t.view()),
+            tools: self.tools,
             note: self
                 .note
                 .filter(|(_, at)| at.elapsed().as_secs() < 5)
@@ -236,6 +247,12 @@ impl App {
 
 /// Chrome first (title buttons, sidebar), then the active page.
 pub fn hit(v: &View, x: f32, y: f32) -> Hit {
+    if v.tools {
+        let h = pages::tools::hit(v, x, y);
+        if h != Hit::None {
+            return h;
+        }
+    }
     if let Some(t) = &v.turbo {
         let h = pages::turbo::hit(v, t, x, y);
         if h != Hit::None {
@@ -305,8 +322,27 @@ pub fn create(page: Page) -> Result<()> {
                 opt: std::env::var("BOSUN_OPT_TAB")
                     .ok()
                     .and_then(|t| t.parse().ok())
-                    .map(crate::pages::optimizer::Optimizer::open),
+                    .map(|t| {
+                        if t == 6 || t == 7 || t == 8 {
+                            // snapshots show the finished list: wait for the search
+                            let mut o = if t == 6 {
+                                crate::pages::optimizer::Optimizer::open_drivers()
+                            } else {
+                                crate::pages::optimizer::Optimizer::open_finder(t)
+                            };
+                            while o.poll_drivers() {
+                                std::thread::sleep(std::time::Duration::from_millis(200));
+                            }
+                            o
+                        } else if t == 5 {
+                            crate::pages::optimizer::Optimizer::open_apps()
+                        } else {
+                            crate::pages::optimizer::Optimizer::open(t)
+                        }
+                    }),
                 // capture hook: BOSUN_TURBO_TAB=<n> opens the Turbo Boost settings
+                // capture hook: BOSUN_TOOLS=1 opens More Optimization Tools
+                tools: std::env::var_os("BOSUN_TOOLS").is_some(),
                 turbo: std::env::var("BOSUN_TURBO_TAB")
                     .ok()
                     .and_then(|t| t.parse().ok())
@@ -446,6 +482,7 @@ struct Key {
     speed: crate::pages::speedup::SpeedInfo,
     opt: Option<crate::pages::optimizer::OptView>,
     turbo: Option<crate::pages::turbo::TurboView>,
+    tools: bool,
     note: Option<&'static str>,
     maximized: bool,
 }
@@ -468,6 +505,7 @@ impl Key {
             speed: v.speed,
             opt: v.opt.clone(),
             turbo: v.turbo.clone(),
+            tools: v.tools,
             note: v.note,
             maximized: v.maximized,
         }
@@ -619,7 +657,9 @@ fn click(hwnd: HWND, h: Hit) {
     match h {
         // Closing the optimizer returns to Speed Up, as its own window would.
         Hit::Close | Hit::OptBack
-            if with_app(|a| a.turbo.take().is_some() || a.opt.take().is_some()) == Some(true) =>
+            if with_app(|a| {
+                std::mem::take(&mut a.tools) || a.turbo.take().is_some() || a.opt.take().is_some()
+            }) == Some(true) =>
         {
             with_app(|a| a.speed = speed_info());
             invalidate(hwnd);
@@ -627,6 +667,84 @@ fn click(hwnd: HWND, h: Hit) {
         Hit::OptStatus(i) => {
             option_status(hwnd, i);
             invalidate(hwnd);
+        }
+        Hit::OptRemove(i)
+            if with_app(|a| a.opt.as_ref().is_some_and(|o| o.tab == 7 || o.tab == 8))
+                == Some(true) =>
+        {
+            let note = with_app(|a| {
+                let o = a.opt.as_mut()?;
+                let list = if o.tab == 7 {
+                    o.large.as_mut()?
+                } else {
+                    o.empty.as_mut()?
+                };
+                let found = list.get(i)?.clone();
+                let dir = bosun_core::clean::journal_dir()?;
+                let label = if o.tab == 7 {
+                    "Large File Finder"
+                } else {
+                    "Empty Folder Finder"
+                };
+                Some(match bosun_core::finder::recycle(&found, &dir, label) {
+                    Ok(()) => {
+                        list.remove(i);
+                        "Moved to the Recycle Bin."
+                    }
+                    Err(_) => "Couldn't move that to the Recycle Bin (it may be in use).",
+                })
+            })
+            .flatten();
+            if let Some(n) = note {
+                with_app(|a| a.note = Some((n, Instant::now())));
+            }
+            invalidate(hwnd);
+        }
+        Hit::Tool(id) => {
+            tool(hwnd, id);
+            invalidate(hwnd);
+        }
+        Hit::OptRemove(_)
+            if with_app(|a| a.opt.as_ref().is_some_and(|o| o.tab == 6)) == Some(true) =>
+        {
+            // Windows Update installs drivers itself (Settings → Optional updates)
+            // SAFETY: opens a Settings page by its URI.
+            unsafe {
+                windows::Win32::UI::Shell::ShellExecuteW(
+                    None,
+                    w!("open"),
+                    w!("ms-settings:windowsupdate-optionalupdates"),
+                    None,
+                    None,
+                    SW_SHOWNORMAL,
+                );
+            }
+            with_app(|a| {
+                a.note = Some((
+                    "Opened Windows Update's optional updates: install drivers there.",
+                    Instant::now(),
+                ))
+            });
+            invalidate(hwnd);
+        }
+        Hit::OptRemove(i)
+            if with_app(|a| a.opt.as_ref().is_some_and(|o| o.tab == 5)) == Some(true) =>
+        {
+            let app = with_app(|a| {
+                a.opt
+                    .as_ref()
+                    .and_then(|o| o.programs.as_ref().map(|v| v[i].clone()))
+            })
+            .flatten();
+            if let Some(app) = app {
+                let note = if bosun_core::apps::uninstall(&app) {
+                    "Started the program's own uninstaller. Press Refresh when it's done."
+                } else {
+                    "Couldn't start that program's uninstaller."
+                };
+                with_app(|a| a.note = Some((note, Instant::now())));
+                invalidate(hwnd);
+            }
         }
         Hit::OptRemove(i) => {
             let ext = with_app(|a| {
@@ -751,6 +869,19 @@ fn click(hwnd: HWND, h: Hit) {
                         o.scroll = 0.0;
                     }
                 }
+                Hit::Card(3) => a.opt = Some(crate::pages::optimizer::Optimizer::open_apps()),
+                Hit::ToolsOpen => a.tools = true,
+                Hit::Card(2) => {
+                    a.opt = Some(crate::pages::optimizer::Optimizer::open_drivers());
+                    // SAFETY: poll timer on our own window, killed when the search ends.
+                    unsafe { SetTimer(Some(hwnd), DRIVER_TIMER, 250, None) };
+                }
+                Hit::OptSort(k) => {
+                    if let Some(o) = a.opt.as_mut() {
+                        o.sort = k;
+                        o.scroll = 0.0;
+                    }
+                }
                 Hit::OptCheck(i) => {
                     if let Some(o) = a.opt.as_mut() {
                         o.checked[i] = !o.checked[i];
@@ -770,7 +901,21 @@ fn click(hwnd: HWND, h: Hit) {
                         o.ignored[i] = true;
                     }
                 }
-                Hit::OptRefresh => a.opt.iter_mut().for_each(|o| o.reload()),
+                Hit::OptRefresh => {
+                    if let Some(o) = a.opt.as_mut() {
+                        if o.finder_mode {
+                            o.search_finder();
+                            // SAFETY: poll timer on our own window, killed when the search ends.
+                            unsafe { SetTimer(Some(hwnd), DRIVER_TIMER, 250, None) };
+                        } else if o.drivers_mode {
+                            o.search_drivers();
+                            // SAFETY: poll timer on our own window, killed when the search ends.
+                            unsafe { SetTimer(Some(hwnd), DRIVER_TIMER, 250, None) };
+                        } else {
+                            o.reload();
+                        }
+                    }
+                }
                 Hit::OptGo => {
                     if let Some(o) = a.opt.as_mut() {
                         let picked: Vec<usize> =
@@ -1054,6 +1199,14 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             }
         }
         WM_TIMER if wp.0 == SPIN_TIMER => on_timer(hwnd),
+        WM_TIMER if wp.0 == DRIVER_TIMER => {
+            let busy = with_app(|a| a.opt.as_mut().is_some_and(|o| o.poll_drivers()));
+            if busy != Some(true) {
+                // SAFETY: our own timer.
+                let _ = unsafe { KillTimer(Some(hwnd), DRIVER_TIMER) };
+            }
+            invalidate(hwnd);
+        }
         WM_TIMER if wp.0 == SCAN_TIMER => {
             let done = with_app(|a| {
                 let Some(p) = a.scan.as_ref().and_then(|s| s.snapshot()) else {
@@ -1234,7 +1387,108 @@ impl View {
     /// A full-window view (Startup Optimizer, Turbo Boost) replaces the
     /// sidebar and title.
     pub fn overlay(&self) -> bool {
-        self.opt.is_some() || self.turbo.is_some()
+        self.opt.is_some() || self.turbo.is_some() || self.tools
+    }
+}
+
+/// Opens `target` (a program, URI or folder) with optional arguments.
+fn shell(target: &str, args: &str) -> bool {
+    // SAFETY: plain ShellExecute with owned strings.
+    let r = unsafe {
+        windows::Win32::UI::Shell::ShellExecuteW(
+            None,
+            w!("open"),
+            &windows::core::HSTRING::from(target),
+            &windows::core::HSTRING::from(args),
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    r.0 as isize > 32
+}
+
+/// Runs a More Optimization Tools entry (ids from `pages::tools::COLUMNS`).
+fn tool(hwnd: HWND, id: u8) {
+    use crate::pages::optimizer::Optimizer;
+    let scan = |picks: u16| {
+        with_app(|a| {
+            a.tools = false;
+            a.opt = None;
+            a.turbo = None;
+            a.page = Page::Care;
+            a.auto_ran = false;
+            a.scan = Some(crate::scan::start(picks));
+        });
+        // SAFETY: poll timer on our own window, killed when the scan ends.
+        unsafe { SetTimer(Some(hwnd), SCAN_TIMER, 33, None) };
+    };
+    let overlay = |o: Optimizer, poll: bool| {
+        with_app(|a| {
+            a.tools = false;
+            a.opt = Some(o);
+        });
+        if poll {
+            // SAFETY: poll timer on our own window, killed when the search ends.
+            unsafe { SetTimer(Some(hwnd), DRIVER_TIMER, 250, None) };
+        }
+    };
+    let ok = match id {
+        0 => {
+            overlay(Optimizer::open(0), false);
+            true
+        }
+        1 => {
+            with_app(|a| {
+                a.tools = false;
+                a.turbo = Some(crate::pages::turbo::Turbo::open(a.speed.turbo_mode));
+            });
+            true
+        }
+        2 => {
+            overlay(Optimizer::open_drivers(), true);
+            true
+        }
+        3 => {
+            overlay(Optimizer::open_apps(), false);
+            true
+        }
+        4 => std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("bosun-tray.exe")))
+            .is_some_and(|t| shell(&t.to_string_lossy(), "")),
+        5 => shell("msinfo32.exe", ""),
+        6 => shell("control.exe", "powercfg.cpl"),
+        7 => shell("ms-settings:defaultapps", ""),
+        8 => shell("windowsdefender:", ""),
+        9 => bosun_core::clean::journal_dir().is_some_and(|d| {
+            let _ = std::fs::create_dir_all(&d);
+            shell(&d.to_string_lossy(), "")
+        }),
+        // Care scans limited to one module (bits = scan::MODULES order)
+        10 => {
+            scan(1 << 3);
+            true
+        }
+        11 => shell("ms-settings:storagesense", ""),
+        12 => {
+            scan(0b11);
+            true
+        }
+        13 => {
+            overlay(Optimizer::open_finder(8), true);
+            true
+        }
+        14 => {
+            scan(1 << 2);
+            true
+        }
+        _ => {
+            overlay(Optimizer::open_finder(7), true);
+            true
+        }
+    };
+    if !ok {
+        with_app(|a| a.note = Some(("Couldn't open that tool.", Instant::now())));
     }
 }
 
@@ -1301,6 +1555,7 @@ pub fn test_view() -> View {
         speed: Default::default(),
         opt: None,
         turbo: None,
+        tools: false,
         note: None,
         maximized: false,
     }

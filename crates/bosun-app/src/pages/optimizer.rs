@@ -15,7 +15,10 @@
 //! IObit's "Boot time" and "Disable rate" come from an admin-only event log
 //! and their crowd data; we show where an entry starts from and its scope.
 
+use bosun_core::apps::App;
+use bosun_core::drivers::Driver;
 use bosun_core::extensions::{Browser, Extension};
+use bosun_core::finder::Found;
 use bosun_core::services::{Service, Start};
 use bosun_core::startup::{Advice, Item, Source, advice};
 use bosun_core::tasks::Task;
@@ -68,6 +71,8 @@ pub struct Row {
     pub icon: isize,
     /// A browser's group header row (Browser Startups) rather than an entry.
     pub group: bool,
+    /// Third info column (Programs: install date).
+    pub c: String,
 }
 
 /// Status pill: on (blue), manual-start service (grey) or off (grey).
@@ -87,6 +92,16 @@ pub struct OptView {
     pub total: usize,
     pub scroll: f32,
     pub show_system: bool,
+    /// Opened as the App/Extension Cleaner (Programs + Browser Extensions).
+    pub apps_mode: bool,
+    /// Programs sort: 0 name, 1 size, 2 install date.
+    pub sort: u8,
+    /// Opened as Driver Updates (one tab).
+    pub drivers_mode: bool,
+    /// Opened as the file finder (Large Files, Empty Folders).
+    pub finder_mode: bool,
+    /// Still asking Windows Update.
+    pub loading: bool,
 }
 
 /// The window's optimizer state.
@@ -103,6 +118,18 @@ pub struct Optimizer {
     pub tasks: Option<Vec<Task>>,
     pub extensions: Option<Vec<Extension>>,
     browser_icons: Vec<(Browser, HICON)>,
+    pub apps_mode: bool,
+    pub programs: Option<Vec<App>>,
+    prog_icons: Vec<HICON>,
+    pub sort: u8,
+    pub drivers_mode: bool,
+    pub drivers: Option<Vec<Driver>>,
+    /// Background Windows Update search in flight.
+    driver_rx: Option<std::sync::mpsc::Receiver<Vec<Driver>>>,
+    pub finder_mode: bool,
+    pub large: Option<Vec<Found>>,
+    pub empty: Option<Vec<Found>>,
+    finder_rx: Option<std::sync::mpsc::Receiver<(u8, Vec<Found>)>>,
     /// Services tab also lists Windows' own services.
     pub show_system: bool,
 }
@@ -146,14 +173,131 @@ impl Optimizer {
             tasks: None,
             extensions: None,
             browser_icons: Vec::new(),
+            apps_mode: false,
+            programs: None,
+            prog_icons: Vec::new(),
+            sort: 0,
+            drivers_mode: false,
+            drivers: None,
+            driver_rx: None,
+            finder_mode: false,
+            large: None,
+            empty: None,
+            finder_rx: None,
             show_system: false,
         };
         o.reload();
         o
     }
 
+    /// Driver Updates (tab 6): Windows Update is asked in the background.
+    pub fn open_drivers() -> Self {
+        let mut o = Self::open(6);
+        o.drivers_mode = true;
+        o.search_drivers();
+        o
+    }
+
+    /// Starts (or restarts) the Windows Update search for drivers.
+    pub fn search_drivers(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // ponytail: a failed search shows as "none found"; the error isn't actionable here
+            let _ = tx.send(bosun_core::drivers::search().unwrap_or_default());
+        });
+        self.drivers = None;
+        self.driver_rx = Some(rx);
+    }
+
+    /// The file finder on Large Files (7) or Empty Folders (8).
+    pub fn open_finder(tab: u8) -> Self {
+        let mut o = Self::open(tab);
+        o.finder_mode = true;
+        o.search_finder();
+        o
+    }
+
+    /// Searches the user's folders for the current finder tab, off the UI thread.
+    pub fn search_finder(&mut self) {
+        let tab = self.tab;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Some(home) = bosun_core::finder::home() else {
+                let _ = tx.send((tab, Vec::new()));
+                return;
+            };
+            let found = if tab == 7 {
+                bosun_core::finder::large_files(&home, &|| false)
+            } else {
+                let mut v: Vec<_> = bosun_core::finder::user_folders()
+                    .iter()
+                    .flat_map(|d| bosun_core::finder::empty_folders(d, &|| false))
+                    .collect();
+                v.sort_by(|a, b| a.path.cmp(&b.path));
+                v
+            };
+            let _ = tx.send((tab, found));
+        });
+        if tab == 7 {
+            self.large = None;
+        } else {
+            self.empty = None;
+        }
+        self.finder_rx = Some(rx);
+    }
+
+    /// Picks up finished searches; `true` while any is still running.
+    pub fn poll_drivers(&mut self) -> bool {
+        if let Some(rx) = &self.finder_rx {
+            match rx.try_recv() {
+                Ok((tab, v)) => {
+                    if tab == 7 {
+                        self.large = Some(v);
+                    } else {
+                        self.empty = Some(v);
+                    }
+                    self.finder_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.finder_rx = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if self.finder_mode
+            && self.finder_rx.is_none()
+            && ((self.tab == 7 && self.large.is_none()) || (self.tab == 8 && self.empty.is_none()))
+        {
+            self.search_finder();
+        }
+        if let Some(rx) = &self.driver_rx {
+            match rx.try_recv() {
+                Ok(v) => {
+                    self.drivers = Some(v);
+                    self.driver_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.drivers = Some(Vec::new());
+                    self.driver_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        self.driver_rx.is_some() || self.finder_rx.is_some()
+    }
+
+    /// The App/Extension Cleaner: Programs (tab 5) and Browser Extensions (tab 4).
+    pub fn open_apps() -> Self {
+        let mut o = Self::open(5);
+        o.apps_mode = true;
+        o
+    }
+
     /// Loads the current tab's entries if it hasn't been opened yet.
     pub fn ensure(&mut self) {
+        if self.tab == 5 && self.programs.is_none() {
+            let list = bosun_core::apps::list();
+            self.prog_icons = list.iter().map(|a| file_icon(a.icon.as_deref())).collect();
+            self.programs = Some(list);
+        }
         if self.tab == 2 && self.services.is_none() {
             let list = bosun_core::services::list();
             self.svc_icons = list.iter().map(|s| file_icon(s.exe.as_deref())).collect();
@@ -184,6 +328,7 @@ impl Optimizer {
         self.services = None;
         self.tasks = None;
         self.extensions = None;
+        self.programs = None;
         self.scroll = 0.0;
         self.ensure();
     }
@@ -195,6 +340,7 @@ impl Optimizer {
             .drain(..)
             .chain(self.svc_icons.drain(..))
             .chain(self.browser_icons.drain(..).map(|(_, i)| i))
+            .chain(self.prog_icons.drain(..))
             .collect();
         for i in all {
             if !i.is_invalid() {
@@ -237,6 +383,27 @@ impl Optimizer {
                 .extensions
                 .as_ref()
                 .map_or_else(Vec::new, |v| (0..v.len()).collect()),
+            6 => self
+                .drivers
+                .as_ref()
+                .map_or_else(Vec::new, |v| (0..v.len()).collect()),
+            7 => self
+                .large
+                .as_ref()
+                .map_or_else(Vec::new, |v| (0..v.len()).collect()),
+            8 => self
+                .empty
+                .as_ref()
+                .map_or_else(Vec::new, |v| (0..v.len()).collect()),
+            5 => self.programs.as_ref().map_or_else(Vec::new, |v| {
+                let mut idx: Vec<usize> = (0..v.len()).collect();
+                match self.sort {
+                    1 => idx.sort_by_key(|&i| std::cmp::Reverse(v[i].size)),
+                    2 => idx.sort_by(|&a, &b| v[b].installed.cmp(&v[a].installed)),
+                    _ => {}
+                }
+                idx
+            }),
             _ => Vec::new(),
         }
     }
@@ -277,6 +444,7 @@ impl Optimizer {
                     checked: self.checked[i],
                     icon: self.icons[i].0 as isize,
                     group: false,
+                    c: String::new(),
                 }
             })
             .collect();
@@ -286,12 +454,92 @@ impl Optimizer {
             total: self.items.len(),
             scroll: self.scroll,
             show_system: self.show_system,
+            apps_mode: self.apps_mode,
+            sort: self.sort,
+            drivers_mode: self.drivers_mode,
+            loading: self.driver_rx.is_some() || self.finder_rx.is_some(),
+            finder_mode: self.finder_mode,
         }
     }
 
     fn view_other(&self) -> OptView {
         let idx = self.listed_other();
         let rows: Vec<Row> = match self.tab {
+            7 | 8 => {
+                let v = if self.tab == 7 {
+                    self.large.as_deref()
+                } else {
+                    self.empty.as_deref()
+                };
+                let v = v.unwrap_or_default();
+                idx.iter()
+                    .map(|&i| {
+                        let p = &v[i].path;
+                        Row {
+                            idx: i,
+                            name: p
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            a: p.parent()
+                                .map(|d| d.display().to_string())
+                                .unwrap_or_default(),
+                            b: if self.tab == 7 {
+                                bosun_core::format::bytes(v[i].size)
+                            } else {
+                                String::new()
+                            },
+                            advice: Advice::Optional,
+                            pill: Pill::On,
+                            checked: false,
+                            icon: 0,
+                            group: false,
+                            c: String::new(),
+                        }
+                    })
+                    .collect()
+            }
+            6 => {
+                let v = self.drivers.as_deref().unwrap_or_default();
+                idx.iter()
+                    .map(|&i| Row {
+                        idx: i,
+                        name: v[i].title.clone(),
+                        a: v[i].class.clone(),
+                        b: v[i].date.clone(),
+                        advice: Advice::Optional,
+                        pill: Pill::On,
+                        checked: false,
+                        icon: 0,
+                        group: false,
+                        c: String::new(),
+                    })
+                    .collect()
+            }
+            5 => {
+                let v = self.programs.as_deref().unwrap_or_default();
+                idx.iter()
+                    .map(|&i| {
+                        let a = &v[i];
+                        Row {
+                            idx: i,
+                            name: a.name.clone(),
+                            a: a.publisher.clone(),
+                            b: if a.size > 0 {
+                                bosun_core::format::bytes(a.size)
+                            } else {
+                                String::new()
+                            },
+                            advice: Advice::Optional,
+                            pill: Pill::On,
+                            checked: false,
+                            icon: self.prog_icons[i].0 as isize,
+                            group: false,
+                            c: a.date(),
+                        }
+                    })
+                    .collect()
+            }
             2 => {
                 let v = self.services.as_deref().unwrap_or_default();
                 idx.iter()
@@ -315,6 +563,7 @@ impl Optimizer {
                             checked: false,
                             icon: self.svc_icons[i].0 as isize,
                             group: false,
+                            c: String::new(),
                         }
                     })
                     .collect()
@@ -343,6 +592,7 @@ impl Optimizer {
                             checked: false,
                             icon: 0,
                             group: true,
+                            c: String::new(),
                         });
                     }
                     rows.push(Row {
@@ -355,6 +605,7 @@ impl Optimizer {
                         checked: false,
                         icon: icon(e.browser),
                         group: false,
+                        c: String::new(),
                     });
                 }
                 rows
@@ -387,6 +638,7 @@ impl Optimizer {
                             checked: false,
                             icon: 0,
                             group: false,
+                            c: String::new(),
                         }
                     })
                     .collect()
@@ -394,6 +646,10 @@ impl Optimizer {
         };
         let total = match self.tab {
             4 => self.extensions.as_ref().map_or(0, Vec::len),
+            5 => self.programs.as_ref().map_or(0, Vec::len),
+            6 => self.drivers.as_ref().map_or(0, Vec::len),
+            7 => self.large.as_ref().map_or(0, Vec::len),
+            8 => self.empty.as_ref().map_or(0, Vec::len),
             2 => self.services.as_ref().map_or(0, |v| {
                 v.iter().filter(|s| self.show_system || !s.system).count()
             }),
@@ -405,6 +661,11 @@ impl Optimizer {
             total,
             scroll: self.scroll,
             show_system: self.show_system,
+            apps_mode: self.apps_mode,
+            sort: self.sort,
+            drivers_mode: self.drivers_mode,
+            loading: self.driver_rx.is_some() || self.finder_rx.is_some(),
+            finder_mode: self.finder_mode,
         }
     }
 
@@ -436,6 +697,22 @@ fn table_bottom(h: f32) -> f32 {
     h - 74.0
 }
 
+/// The tabs shown: (tab id, label) by position.
+fn tab_list(apps_mode: bool, drivers_mode: bool, finder_mode: bool) -> Vec<(u8, &'static str)> {
+    if finder_mode {
+        vec![(7, "Large Files"), (8, "Empty Folders")]
+    } else if drivers_mode {
+        vec![(6, "Driver Updates")]
+    } else if apps_mode {
+        vec![(5, "Programs"), (4, "Browser Extensions")]
+    } else {
+        TABS.iter()
+            .enumerate()
+            .map(|(i, t)| (i as u8, *t))
+            .collect()
+    }
+}
+
 fn tab_rect(i: usize) -> D2D_RECT_F {
     rect(
         TAB_X + TAB_W * i as f32,
@@ -463,6 +740,33 @@ fn columns(tab: u8) -> [(&'static str, f32); 5] {
                 ("Now", 486.0),
                 ("Recommendation", 599.0),
                 ("Status & Operation", 743.0),
+            ];
+        }
+        7 | 8 => {
+            return [
+                ("Name", 49.0),
+                ("Location", 357.0),
+                (if tab == 7 { "Size" } else { "" }, 660.0),
+                ("", 740.0),
+                ("Operation", 778.0),
+            ];
+        }
+        6 => {
+            return [
+                ("Name", 49.0),
+                ("Type", 560.0),
+                ("Date", 660.0),
+                ("", 740.0),
+                ("Operation", 778.0),
+            ];
+        }
+        5 => {
+            return [
+                ("Name", 49.0),
+                ("Publisher", 357.0),
+                ("Size", 560.0),
+                ("Installed", 660.0),
+                ("Operation", 778.0),
             ];
         }
         4 => {
@@ -508,11 +812,19 @@ pub fn hit(v: &View, o: &OptView, x: f32, y: f32) -> Hit {
     if (x - 26.0).hypot(y - 23.5) <= 14.0 {
         return Hit::OptBack;
     }
-    if let Some(i) = (0..TABS.len()).find(|&i| contains(&tab_rect(i), x, y)) {
-        return Hit::OptTab(i as u8);
+    let tabs = tab_list(o.apps_mode, o.drivers_mode, o.finder_mode);
+    if let Some(i) = (0..tabs.len()).find(|&i| contains(&tab_rect(i), x, y)) {
+        return Hit::OptTab(tabs[i].0);
+    }
+    if o.tab == 5 && (170.0..188.0).contains(&y) {
+        for (k, x0) in [(0u8, 49.0), (1, 560.0), (2, 660.0)] {
+            if (x0..x0 + 80.0).contains(&x) {
+                return Hit::OptSort(k);
+            }
+        }
     }
     let foot = v.h - 54.0;
-    if o.tab != 4 && contains(&rect(TABLE_X, foot - 10.0, 90.0, 20.0), x, y) {
+    if o.tab < 4 && contains(&rect(TABLE_X, foot - 10.0, 90.0, 20.0), x, y) {
         return Hit::OptRescue;
     }
     if contains(&rect(866.0, foot - 10.0, 52.0, 20.0), x, y) {
@@ -539,6 +851,7 @@ pub fn hit(v: &View, o: &OptView, x: f32, y: f32) -> Hit {
             0 if contains(&rect(775.0, cy - 10.0, 50.0, 20.0), x, y) => Hit::OptIgnore(r.idx),
             0 if x < 360.0 => Hit::OptCheck(r.idx),
             1..=3 if contains(&rect(744.0, cy - 11.0, 125.0, 22.0), x, y) => Hit::OptStatus(r.idx),
+            5..=8 if contains(&rect(776.0, cy - 10.0, 70.0, 20.0), x, y) => Hit::OptRemove(r.idx),
             4 if !r.group && contains(&rect(735.0, cy - 10.0, 60.0, 20.0), x, y) => {
                 Hit::OptRemove(r.idx)
             }
@@ -594,9 +907,12 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
         8.0,
         col(oc::PANEL),
     );
-    for (i, name) in TABS.iter().enumerate() {
+    for (i, (id, name)) in tab_list(o.apps_mode, o.drivers_mode, o.finder_mode)
+        .into_iter()
+        .enumerate()
+    {
         let r = tab_rect(i);
-        let on = o.tab as usize == i;
+        let on = o.tab == id;
         if on {
             p.fill_rr(
                 rect(r.left, r.top, r.right - r.left, 60.0),
@@ -604,7 +920,7 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
                 col(oc::PANEL),
             );
         }
-        let c = if on || v.hover == Hit::OptTab(i as u8) {
+        let c = if on || v.hover == Hit::OptTab(id) {
             0xFFFFFF
         } else {
             0xC8C8C8
@@ -621,7 +937,27 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
     }
     match o.tab {
         0 => draw_quick_head(p, v, o),
-        1..=4 => {
+        7 | 8 if o.loading => text_at(
+            p,
+            "Searching your folders…",
+            &f.pop_label,
+            15.0,
+            38.0,
+            860.0,
+            123.5,
+            oc::TEXT,
+        ),
+        6 if o.loading => text_at(
+            p,
+            "Checking Windows Update for driver updates…",
+            &f.pop_label,
+            15.0,
+            38.0,
+            860.0,
+            123.5,
+            oc::TEXT,
+        ),
+        1..=8 => {
             let n = o.total.to_string();
             let wn = p.g.measure(&n, &f.pop_label);
             text_at(p, &n, &f.pop_label, 15.0, 38.0, wn + 2.0, 123.5, oc::ORANGE);
@@ -633,6 +969,10 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
                     " services are found. System startup may be slowed down by the unnecessary ones."
                 }
                 4 => " extensions are found. You can remove the unwanted ones as per your needs.",
+                5 => " programs are installed. Uninstall the ones you no longer use.",
+                6 => " driver updates are offered by Windows Update for this PC.",
+                7 => " large files (100 MB or more) are in your folders.",
+                8 => " empty folders are in your folders.",
                 _ => {
                     " scheduled tasks are found. System startup may be slowed down by the unnecessary ones."
                 }
@@ -692,6 +1032,12 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
                 1 => "No startup items found.",
                 2 => "No non-Windows services found.",
                 4 => "No browser extensions found.",
+                5 => "No installed programs found.",
+                6 if o.loading => "Asking Windows Update… this can take a minute.",
+                7 | 8 if o.loading => "Searching your folders… this can take a minute.",
+                7 => "No files of 100 MB or more in your folders.",
+                8 => "No empty folders in your folders.",
+                6 => "Your drivers are up to date: Windows Update offers no driver updates.",
                 _ => "No scheduled tasks found outside Windows' own.",
             };
             p.text(
@@ -705,7 +1051,7 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
     }
     let foot = v.h - 54.0;
     // Browser Startups has no Rescue Center link in the reference
-    if o.tab != 4 {
+    if o.tab < 4 {
         link(
             p,
             "Rescue Center",
@@ -803,13 +1149,48 @@ fn draw_row(p: &Painter, v: &View, o: &OptView, r: &Row, cy: f32) {
         cy - 0.5,
         oc::TEXT,
     );
+    // each info column stops 10 px short of the next one
     let a_w = if r.b.is_empty() {
         cols[3].1 - cols[1].1 - 16.0
     } else {
-        120.0
+        cols[2].1 - cols[1].1 - 10.0
     };
     text_at(p, &r.a, &f.m13, 13.0, cols[1].1, a_w, cy, oc::TEXT);
     text_at(p, &r.b, &f.m13, 13.0, cols[2].1, 110.0, cy, oc::TEXT);
+    if o.tab == 7 || o.tab == 8 {
+        link(
+            p,
+            "Recycle",
+            778.0,
+            cy,
+            v.hover == Hit::OptRemove(r.idx),
+            false,
+        );
+        return;
+    }
+    if o.tab == 6 {
+        link(
+            p,
+            "Install",
+            778.0,
+            cy,
+            v.hover == Hit::OptRemove(r.idx),
+            false,
+        );
+        return;
+    }
+    if o.tab == 5 {
+        text_at(p, &r.c, &f.m13, 13.0, cols[3].1, 110.0, cy, oc::TEXT);
+        link(
+            p,
+            "Uninstall",
+            778.0,
+            cy,
+            v.hover == Hit::OptRemove(r.idx),
+            false,
+        );
+        return;
+    }
     if o.tab == 4 {
         link(
             p,

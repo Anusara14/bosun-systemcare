@@ -271,6 +271,7 @@ mod tests {
             speed: Default::default(),
             opt: None,
             turbo: None,
+            tools: false,
             note: None,
             maximized: false,
         }

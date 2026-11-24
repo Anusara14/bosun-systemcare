@@ -17,9 +17,9 @@ use std::process::Command;
 
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
-    RegCloseKey, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW, RegEnumValueW, RegGetValueW,
-    RegOpenKeyExW,
+    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, RRF_RT_REG_DWORD, RRF_RT_REG_EXPAND_SZ,
+    RRF_RT_REG_SZ, RegCloseKey, RegDeleteTreeW, RegDeleteValueW, RegEnumKeyExW, RegEnumValueW,
+    RegGetValueW, RegOpenKeyExW,
 };
 use windows::core::{HSTRING, PWSTR};
 
@@ -151,6 +151,31 @@ pub(crate) fn string(k: &Key, sub: Option<&str>, name: &str) -> Option<String> {
     let n = (cb as usize / 2).saturating_sub(1);
     buf.truncate(n);
     Some(String::from_utf16_lossy(&buf))
+}
+
+/// A DWORD value of `sub` (or the key itself).
+pub(crate) fn dword(k: &Key, sub: Option<&str>, name: &str) -> Option<u32> {
+    let sub = sub.map(HSTRING::from).unwrap_or_default();
+    let mut v = 0u32;
+    let mut cb = 4u32;
+    // SAFETY: reads one DWORD into `v`.
+    let r = unsafe {
+        RegGetValueW(
+            k.0,
+            &sub,
+            &HSTRING::from(name),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut v as *mut u32).cast()),
+            Some(&mut cb),
+        )
+    };
+    (r == ERROR_SUCCESS).then_some(v)
+}
+
+/// Subkey names of `k`.
+pub(crate) fn subkeys(k: &Key) -> Vec<String> {
+    subkey_names(k)
 }
 
 /// `C:\x\app.exe.FriendlyAppName` → `C:\x\app.exe`.

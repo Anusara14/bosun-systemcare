@@ -5,6 +5,7 @@ pub mod optimizer;
 mod placeholder;
 pub mod scan;
 pub mod speedup;
+pub mod tools;
 pub mod turbo;
 
 use bosun_ui::gfx::Painter;
@@ -52,6 +53,9 @@ impl Page {
 }
 
 pub fn draw(p: &Painter, v: &View) {
+    if v.tools {
+        return tools::draw(p, v);
+    }
     if let Some(t) = &v.turbo {
         return turbo::draw(p, v, t);
     }

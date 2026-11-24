@@ -58,10 +58,11 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
     if y < TITLE_H {
         return buttons(v.w)
             .into_iter()
+            .filter(|(h, _)| !v.overlay() || matches!(h, Hit::Close | Hit::Max | Hit::Min))
             .find(|(_, cx)| contains(&button_rect(*cx), x, y))
             .map_or(Hit::None, |(h, _)| h);
     }
-    if v.scan.is_some() {
+    if v.scan.is_some() || v.overlay() {
         return Hit::None;
     }
     ALL.iter()
@@ -71,7 +72,7 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
 }
 
 pub fn draw(p: &Painter, v: &View) {
-    if v.scan.is_none() {
+    if v.scan.is_none() && !v.overlay() {
         draw_sidebar(p, v);
     }
     draw_title(p, v);
@@ -113,7 +114,9 @@ fn draw_sidebar(p: &Painter, v: &View) {
 
 fn draw_title(p: &Painter, v: &View) {
     let f = &p.g.f;
-    if v.scan.is_some() {
+    if v.overlay() {
+        // the optimizer has no title, only its back arrow (drawn by the page)
+    } else if v.scan.is_some() {
         // Scanning: the title moves to the left edge and names the mode.
         let mode = match v.mode {
             crate::window::Mode::Recommended => "Recommended",
@@ -138,6 +141,9 @@ fn draw_title(p: &Painter, v: &View) {
         );
     }
     for (h, cx) in buttons(v.w) {
+        if v.overlay() && !matches!(h, Hit::Close | Hit::Max | Hit::Min) {
+            continue;
+        }
         let r = button_rect(cx);
         let hovered = v.hover == h;
         if hovered {
@@ -262,6 +268,9 @@ mod tests {
             auto_fix: false,
             picks: crate::scan::ALL,
             manual_t: 0.0,
+            speed: Default::default(),
+            opt: None,
+            turbo: None,
             note: None,
             maximized: false,
         }

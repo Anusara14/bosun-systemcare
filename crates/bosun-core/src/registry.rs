@@ -47,7 +47,7 @@ pub struct Orphan {
     pub missing: PathBuf,
 }
 
-struct Key(HKEY);
+pub(crate) struct Key(pub(crate) HKEY);
 
 impl Drop for Key {
     fn drop(&mut self) {
@@ -59,6 +59,11 @@ impl Drop for Key {
 }
 
 fn open(sub: &str, write: bool) -> Option<Key> {
+    open_in(HKEY_CURRENT_USER, sub, write)
+}
+
+/// Opens `root\sub` for reading (and setting values with `write`).
+pub(crate) fn open_in(root: HKEY, sub: &str, write: bool) -> Option<Key> {
     let mut h = HKEY::default();
     let sam = if write {
         KEY_READ | KEY_SET_VALUE
@@ -66,11 +71,11 @@ fn open(sub: &str, write: bool) -> Option<Key> {
         KEY_READ
     };
     // SAFETY: opens a key under HKCU into `h`.
-    let r = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, &HSTRING::from(sub), None, sam, &mut h) };
+    let r = unsafe { RegOpenKeyExW(root, &HSTRING::from(sub), None, sam, &mut h) };
     (r == ERROR_SUCCESS).then_some(Key(h))
 }
 
-fn value_names(k: &Key) -> Vec<String> {
+pub(crate) fn value_names(k: &Key) -> Vec<String> {
     let mut out = Vec::new();
     for i in 0.. {
         let mut buf = [0u16; 16_384];
@@ -123,7 +128,7 @@ fn subkey_names(k: &Key) -> Vec<String> {
 }
 
 /// A string value (`""` for the default value), environment-expanded.
-fn string(k: &Key, sub: Option<&str>, name: &str) -> Option<String> {
+pub(crate) fn string(k: &Key, sub: Option<&str>, name: &str) -> Option<String> {
     let sub = sub.map(HSTRING::from).unwrap_or_default();
     let name = HSTRING::from(name);
     let mut buf = vec![0u16; 4096];

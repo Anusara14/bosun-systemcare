@@ -1,8 +1,11 @@
 //! Pages shown in the content area to the right of the sidebar.
 
 pub mod care;
+pub mod optimizer;
 mod placeholder;
 pub mod scan;
+pub mod speedup;
+pub mod turbo;
 
 use bosun_ui::gfx::Painter;
 
@@ -49,21 +52,32 @@ impl Page {
 }
 
 pub fn draw(p: &Painter, v: &View) {
+    if let Some(t) = &v.turbo {
+        return turbo::draw(p, v, t);
+    }
+    if let Some(o) = &v.opt {
+        return optimizer::draw(p, v, o);
+    }
     if let Some(s) = &v.scan {
         return scan::draw(p, v, s);
     }
     match v.page {
         Page::Care => care::draw(p, v),
+        Page::SpeedUp => speedup::draw(p, v),
         other => placeholder::draw(p, v, other),
     }
 }
 
 pub fn hit(v: &View, x: f32, y: f32) -> Hit {
+    if v.opt.is_some() || v.turbo.is_some() {
+        return Hit::None;
+    }
     if let Some(s) = &v.scan {
         return scan::hit(v, s, x, y);
     }
     match v.page {
         Page::Care => care::hit(v, x, y),
+        Page::SpeedUp => speedup::hit(v, x, y),
         _ => Hit::None,
     }
 }

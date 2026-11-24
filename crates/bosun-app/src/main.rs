@@ -9,6 +9,7 @@ mod frame;
 mod icons;
 mod pages;
 mod scan;
+mod tray_ini;
 mod window;
 
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};

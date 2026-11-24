@@ -21,9 +21,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
     IDC_ARROW, IDC_HAND, IsZoomed, KillTimer, LoadCursorW, LoadIconW, PostQuitMessage,
     RegisterClassExW, SW_MINIMIZE, SW_SHOWNORMAL, SetCursor, SetTimer, ShowWindow, WM_DESTROY,
-    WM_DPICHANGED, WM_GETMINMAXINFO, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE,
-    WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR,
-    WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
+    WM_DPICHANGED, WM_GETMINMAXINFO, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_PAINT,
+    WM_SETCURSOR, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -102,6 +102,30 @@ pub enum Hit {
     /// Manual mode: a module's tick box, or Select All.
     Pick(usize),
     PickAll,
+    /// Speed Up: a card's button, a Real-Time TuneUp switch.
+    Card(u8),
+    Toggle(u8),
+    /// Startup Optimizer (indices are into its item list).
+    OptTab(u8),
+    OptBack,
+    OptCheck(usize),
+    OptCheckAll,
+    OptIgnore(usize),
+    OptGo,
+    OptStatus(usize),
+    OptRefresh,
+    OptRescue,
+    OptSystem,
+    OptRemove(usize),
+    /// Turbo Boost settings and the Speed Up card's split button.
+    TurboMode,
+    TurboTab(u8),
+    TurboGo,
+    TurboPower,
+    TurboRecommend,
+    TurboTick(Option<usize>),
+    TurboModeCard,
+    TurboConfigure,
 }
 
 impl Hit {
@@ -129,6 +153,11 @@ pub struct View {
     pub picks: u16,
     /// Recommended (0) → Manual (1) layout, animated.
     pub manual_t: f32,
+    pub speed: crate::pages::speedup::SpeedInfo,
+    /// The Startup Optimizer, when open (it replaces the page and sidebar).
+    pub opt: Option<crate::pages::optimizer::OptView>,
+    /// Turbo Boost settings, when open (also replaces the page and sidebar).
+    pub turbo: Option<crate::pages::turbo::TurboView>,
     pub note: Option<&'static str>,
     pub maximized: bool,
 }
@@ -151,6 +180,9 @@ struct App {
     /// Manual mode's ticked modules (bit i = `scan::MODULES[i]`).
     picks: u16,
     manual_t: f32,
+    speed: crate::pages::speedup::SpeedInfo,
+    opt: Option<crate::pages::optimizer::Optimizer>,
+    turbo: Option<crate::pages::turbo::Turbo>,
     /// Running layout change between modes: (start, from, to).
     mode_anim: Option<(Instant, f32, f32)>,
     /// Running hover transition: (start, from, to).
@@ -189,6 +221,9 @@ impl App {
             auto_fix: self.auto_fix,
             picks: self.picks,
             manual_t: self.manual_t,
+            speed: self.speed,
+            opt: self.opt.as_ref().map(|o| o.view()),
+            turbo: self.turbo.as_ref().map(|t| t.view()),
             note: self
                 .note
                 .filter(|(_, at)| at.elapsed().as_secs() < 5)
@@ -201,6 +236,18 @@ impl App {
 
 /// Chrome first (title buttons, sidebar), then the active page.
 pub fn hit(v: &View, x: f32, y: f32) -> Hit {
+    if let Some(t) = &v.turbo {
+        let h = pages::turbo::hit(v, t, x, y);
+        if h != Hit::None {
+            return h;
+        }
+    }
+    if let Some(o) = &v.opt {
+        let h = pages::optimizer::hit(v, o, x, y);
+        if h != Hit::None {
+            return h;
+        }
+    }
     match chrome::hit(v, x, y) {
         Hit::None => pages::hit(v, x, y),
         h => h,
@@ -253,6 +300,22 @@ pub fn create(page: Page) -> Result<()> {
                 auto_ran: false,
                 picks: crate::scan::ALL,
                 manual_t: 0.0,
+                speed: speed_info(),
+                // capture hook: BOSUN_OPT_TAB=<n> opens the Startup Optimizer
+                opt: std::env::var("BOSUN_OPT_TAB")
+                    .ok()
+                    .and_then(|t| t.parse().ok())
+                    .map(crate::pages::optimizer::Optimizer::open),
+                // capture hook: BOSUN_TURBO_TAB=<n> opens the Turbo Boost settings
+                turbo: std::env::var("BOSUN_TURBO_TAB")
+                    .ok()
+                    .and_then(|t| t.parse().ok())
+                    .map(|t| {
+                        let mut x =
+                            crate::pages::turbo::Turbo::open(bosun_core::turbo::State::load().mode);
+                        x.tab = t;
+                        x
+                    }),
                 mode_anim: None,
                 anim: None,
                 note: None,
@@ -268,6 +331,28 @@ pub fn create(page: Page) -> Result<()> {
         }
         if std::env::var_os("BOSUN_SCAN_SCRIPT").is_some() {
             SetTimer(Some(hwnd), SCRIPT_SCAN, 1500, None);
+        }
+        // capture hook: BOSUN_SNAPSHOT=<png> draws the first view off-screen at
+        // the reference size, saves it and exits without showing the window
+        if let Some(out) = std::env::var_os("BOSUN_SNAPSHOT") {
+            with_app(|a| {
+                let mut v = a.view();
+                v.w = DEFAULT_W;
+                v.h = DEFAULT_H;
+                let bg = col(backdrop::BASE);
+                let _ = bosun_ui::snapshot::save_png(
+                    graphics(),
+                    960,
+                    660,
+                    bg,
+                    std::path::Path::new(&out),
+                    |p| {
+                        chrome::draw(p, &v);
+                        pages::draw(p, &v);
+                    },
+                );
+            });
+            std::process::exit(0);
         }
         set_icons(hwnd, hinst.into(), dpi);
         let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
@@ -358,6 +443,9 @@ struct Key {
     auto_fix: bool,
     picks: u16,
     manual_t: f32,
+    speed: crate::pages::speedup::SpeedInfo,
+    opt: Option<crate::pages::optimizer::OptView>,
+    turbo: Option<crate::pages::turbo::TurboView>,
     note: Option<&'static str>,
     maximized: bool,
 }
@@ -377,6 +465,9 @@ impl Key {
             auto_fix: v.auto_fix,
             picks: v.picks,
             manual_t: v.manual_t,
+            speed: v.speed,
+            opt: v.opt.clone(),
+            turbo: v.turbo.clone(),
             note: v.note,
             maximized: v.maximized,
         }
@@ -526,6 +617,84 @@ fn hit_at(x: f32, y: f32) -> Hit {
 
 fn click(hwnd: HWND, h: Hit) {
     match h {
+        // Closing the optimizer returns to Speed Up, as its own window would.
+        Hit::Close | Hit::OptBack
+            if with_app(|a| a.turbo.take().is_some() || a.opt.take().is_some()) == Some(true) =>
+        {
+            with_app(|a| a.speed = speed_info());
+            invalidate(hwnd);
+        }
+        Hit::OptStatus(i) => {
+            option_status(hwnd, i);
+            invalidate(hwnd);
+        }
+        Hit::OptRemove(i) => {
+            let ext = with_app(|a| {
+                a.opt
+                    .as_ref()
+                    .and_then(|o| o.extensions.as_ref().map(|v| v[i].clone()))
+            })
+            .flatten();
+            if let Some(e) = ext {
+                let exe = e
+                    .browser
+                    .exe_path()
+                    .map_or_else(|| e.browser.exe().into(), |p| p.display().to_string());
+                // SAFETY: opens the browser on its own page for this extension.
+                let r = unsafe {
+                    windows::Win32::UI::Shell::ShellExecuteW(
+                        None,
+                        w!("open"),
+                        &windows::core::HSTRING::from(exe),
+                        &windows::core::HSTRING::from(e.browser.page(&e.id)),
+                        None,
+                        SW_SHOWNORMAL,
+                    )
+                };
+                let note = if r.0 as isize > 32 {
+                    "Opened the extension's page in its browser: remove it there."
+                } else {
+                    "Couldn't open that browser."
+                };
+                with_app(|a| a.note = Some((note, Instant::now())));
+                invalidate(hwnd);
+            }
+        }
+        Hit::TurboMode | Hit::TurboModeCard => {
+            use bosun_core::turbo::Mode;
+            let cur = with_app(|a| a.turbo.as_ref().map_or(a.speed.turbo_mode, |t| t.mode))
+                .unwrap_or_default();
+            let labels: Vec<&str> = Mode::ALL.iter().map(|m| m.label()).collect();
+            let at = Mode::ALL.iter().position(|m| *m == cur).unwrap_or(0);
+            if let Some(k) = choice_menu(hwnd, &labels, at) {
+                with_app(|a| {
+                    if let Some(t) = a.turbo.as_mut() {
+                        t.mode = Mode::ALL[k];
+                    }
+                    a.speed.turbo_mode = Mode::ALL[k];
+                    let mut st = bosun_core::turbo::State::load();
+                    st.mode = Mode::ALL[k];
+                    let _ = st.save();
+                });
+            }
+            invalidate(hwnd);
+        }
+        Hit::OptRescue => {
+            if let Some(dir) = bosun_core::clean::journal_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                // SAFETY: opens our journal folder in Explorer.
+                unsafe {
+                    windows::Win32::UI::Shell::ShellExecuteW(
+                        None,
+                        w!("open"),
+                        &windows::core::HSTRING::from(dir.as_os_str()),
+                        None,
+                        None,
+                        SW_SHOWNORMAL,
+                    );
+                }
+            }
+        }
         // SAFETY: closing our own window ends the process.
         Hit::Close => unsafe {
             let _ = DestroyWindow(hwnd);
@@ -538,7 +707,118 @@ fn click(hwnd: HWND, h: Hit) {
         Hit::Menu => chrome::show_menu(hwnd),
         _ => {
             with_app(|a| match h {
-                Hit::Nav(p) => a.page = p,
+                Hit::Nav(p) => {
+                    if p == Page::SpeedUp {
+                        a.speed = speed_info();
+                    }
+                    a.page = p;
+                }
+                Hit::Card(1) => a.opt = Some(crate::pages::optimizer::Optimizer::open(0)),
+                Hit::TurboConfigure => {
+                    a.turbo = Some(crate::pages::turbo::Turbo::open(a.speed.turbo_mode))
+                }
+                Hit::Card(0) => {
+                    a.note = Some((
+                        turbo_toggle(a.speed.turbo_on, a.speed.turbo_mode, None),
+                        Instant::now(),
+                    ));
+                    a.speed = speed_info();
+                }
+                Hit::TurboTab(t) => a.turbo.iter_mut().for_each(|x| {
+                    x.tab = t;
+                    x.scroll = 0.0;
+                }),
+                Hit::TurboTick(i) => a.turbo.iter_mut().for_each(|x| x.toggle(i)),
+                Hit::TurboRecommend => a.turbo.iter_mut().for_each(|x| x.recommend()),
+                Hit::TurboPower => a.turbo.iter_mut().for_each(|x| x.power = !x.power),
+                Hit::TurboGo => {
+                    if let Some(t) = a.turbo.take() {
+                        a.note =
+                            Some((turbo_toggle(false, t.mode, Some(t.plan())), Instant::now()));
+                        a.speed = speed_info();
+                    }
+                }
+                Hit::OptTab(t) => {
+                    if let Some(o) = a.opt.as_mut() {
+                        o.tab = t;
+                        o.scroll = 0.0;
+                        o.ensure();
+                    }
+                }
+                Hit::OptSystem => {
+                    if let Some(o) = a.opt.as_mut() {
+                        o.show_system = !o.show_system;
+                        o.scroll = 0.0;
+                    }
+                }
+                Hit::OptCheck(i) => {
+                    if let Some(o) = a.opt.as_mut() {
+                        o.checked[i] = !o.checked[i];
+                    }
+                }
+                Hit::OptCheckAll => {
+                    if let Some(o) = a.opt.as_mut() {
+                        let listed = o.listed();
+                        let all = listed.iter().all(|&i| o.checked[i]);
+                        for i in listed {
+                            o.checked[i] = !all;
+                        }
+                    }
+                }
+                Hit::OptIgnore(i) => {
+                    if let Some(o) = a.opt.as_mut() {
+                        o.ignored[i] = true;
+                    }
+                }
+                Hit::OptRefresh => a.opt.iter_mut().for_each(|o| o.reload()),
+                Hit::OptGo => {
+                    if let Some(o) = a.opt.as_mut() {
+                        let picked: Vec<usize> =
+                            o.listed().into_iter().filter(|&i| o.checked[i]).collect();
+                        if picked.is_empty() {
+                            a.note = Some(("Tick the items to turn off first.", Instant::now()));
+                        } else {
+                            let failed = picked
+                                .iter()
+                                .filter(|&&i| set_startup(&o.items[i], false).is_err())
+                                .count();
+                            let done = picked.len() - failed;
+                            a.note = Some((
+                                if failed == 0 {
+                                    "Done: those items no longer start with Windows."
+                                } else if done == 0 {
+                                    "Those items are for all users and need administrator rights."
+                                } else {
+                                    "Some items were turned off; all-user ones need administrator rights."
+                                },
+                                Instant::now(),
+                            ));
+                            o.reload();
+                        }
+                    }
+                }
+                Hit::Card(_) => {
+                    a.note = Some((
+                        "Turbo Boost, Driver Updates and the App Cleaner arrive later in Phase 4.",
+                        Instant::now(),
+                    ))
+                }
+                Hit::Toggle(i) => {
+                    let (key, on) = match i {
+                        0 => ("auto_ram_clean", !a.speed.auto_ram),
+                        _ => ("widget_visible", !a.speed.monitor),
+                    };
+                    match crate::tray_ini::set(key, on) {
+                        Ok(()) => {
+                            a.speed = speed_info();
+                            a.note = Some((
+                                "Saved. The tray applies it the next time it starts.",
+                                Instant::now(),
+                            ));
+                        }
+                        Err(_) => a.note = Some(("Couldn't save the setting.", Instant::now())),
+                    }
+                }
                 Hit::Mode(m) if a.mode != m => {
                     a.mode = m;
                     let to = if m == Mode::Manual { 1.0 } else { 0.0 };
@@ -753,6 +1033,19 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             invalidate(hwnd);
             return LRESULT(0);
         }
+        WM_MOUSEWHEEL => {
+            let delta = ((wp.0 >> 16) & 0xFFFF) as i16 as f32;
+            let changed = with_app(|a| {
+                let h = a.size().1;
+                let dy = -delta / 120.0;
+                a.turbo.as_mut().map(|t| t.scroll_by(dy * 40.0)).is_some()
+                    || a.opt.as_mut().map(|o| o.scroll_by(dy * 61.0, h)).is_some()
+            });
+            if changed == Some(true) {
+                invalidate(hwnd);
+            }
+            return LRESULT(0);
+        }
         WM_SETCURSOR => {
             if with_app(|a| a.hover.clickable() && a.hover != Hit::Max).unwrap_or(false) {
                 // SAFETY: system cursor.
@@ -824,6 +1117,171 @@ pub fn screen_to_dip(hwnd: HWND, pt: POINT) -> (f32, f32) {
     }
 }
 
+/// Turns a startup entry on or off, journaled; the message is for the user.
+fn set_startup(
+    item: &bosun_core::startup::Item,
+    on: bool,
+) -> std::result::Result<(), &'static str> {
+    let dir = bosun_core::clean::journal_dir().ok_or("No place to write the journal.")?;
+    bosun_core::startup::set_enabled(item, on, &dir).map_err(|_| {
+        if item.source.machine_wide() {
+            "That item is for all users and needs administrator rights."
+        } else {
+            "Couldn't change that item."
+        }
+    })
+}
+
+/// A menu of `labels` under the cursor, `current` ticked; the chosen index
+/// when it differs from `current`.
+fn choice_menu(hwnd: HWND, labels: &[&str], current: usize) -> Option<usize> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_CHECKED, MF_STRING,
+        TPM_RETURNCMD, TrackPopupMenu,
+    };
+    // SAFETY: a popup menu owned by our window, destroyed after use.
+    unsafe {
+        let menu = CreatePopupMenu().ok()?;
+        for (k, l) in labels.iter().enumerate() {
+            let flags = if k == current {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            };
+            let _ = AppendMenuW(menu, flags, k + 1, &windows::core::HSTRING::from(*l));
+        }
+        let mut pt = POINT::default();
+        let _ = GetCursorPos(&mut pt);
+        let c = TrackPopupMenu(menu, TPM_RETURNCMD, pt.x, pt.y, None, hwnd, None).0;
+        let _ = DestroyMenu(menu);
+        let picked = usize::try_from(c).ok()?.checked_sub(1)?;
+        (picked != current).then_some(picked)
+    }
+}
+
+/// The status menu for row `i` on the optimizer's current tab, applied.
+fn option_status(hwnd: HWND, i: usize) {
+    use bosun_core::services::Start;
+    let Some(tab) = with_app(|a| a.opt.as_ref().map(|o| o.tab)).flatten() else {
+        return;
+    };
+    let dir = bosun_core::clean::journal_dir();
+    let admin = "That needs administrator rights.";
+    let msg: Option<&'static str> = match tab {
+        2 => {
+            const STARTS: [Start; 3] = [Start::Automatic, Start::Manual, Start::Disabled];
+            let svc = with_app(|a| {
+                a.opt
+                    .as_ref()
+                    .and_then(|o| o.services.as_ref().map(|v| v[i].clone()))
+            })
+            .flatten();
+            let Some(svc) = svc else { return };
+            let cur = STARTS
+                .iter()
+                .position(|s| *s == svc.start)
+                .unwrap_or(usize::MAX);
+            let Some(k) = choice_menu(hwnd, &["Automatic", "Manual", "Disabled"], cur) else {
+                return;
+            };
+            match dir.map(|d| bosun_core::services::set_start(&svc, STARTS[k], &d)) {
+                Some(Ok(())) => None,
+                _ => Some(admin),
+            }
+        }
+        3 => {
+            let task = with_app(|a| {
+                a.opt
+                    .as_ref()
+                    .and_then(|o| o.tasks.as_ref().map(|v| v[i].clone()))
+            })
+            .flatten();
+            let Some(task) = task else { return };
+            let Some(k) = choice_menu(hwnd, &["Enabled", "Disabled"], usize::from(!task.enabled))
+            else {
+                return;
+            };
+            match dir.map(|d| bosun_core::tasks::set_enabled(&task, k == 0, &d)) {
+                Some(Ok(())) => None,
+                _ => Some("That task belongs to another account and needs administrator rights."),
+            }
+        }
+        _ => {
+            let item = with_app(|a| a.opt.as_ref().map(|o| o.items[i].clone())).flatten();
+            let Some(item) = item else { return };
+            let Some(k) = choice_menu(hwnd, &["Enabled", "Disabled"], usize::from(!item.enabled))
+            else {
+                return;
+            };
+            set_startup(&item, k == 0).err()
+        }
+    };
+    with_app(|a| {
+        if let Some(m) = msg {
+            a.note = Some((m, Instant::now()));
+        }
+        if let Some(o) = a.opt.as_mut() {
+            let scroll = o.scroll;
+            o.reload();
+            o.tab = tab;
+            o.ensure();
+            o.scroll = scroll;
+        }
+    });
+}
+
+impl View {
+    /// A full-window view (Startup Optimizer, Turbo Boost) replaces the
+    /// sidebar and title.
+    pub fn overlay(&self) -> bool {
+        self.opt.is_some() || self.turbo.is_some()
+    }
+}
+
+/// Turns Turbo Boost on (with `plan`, or the recommended one) or off; the
+/// message is for the user.
+fn turbo_toggle(
+    on: bool,
+    mode: bosun_core::turbo::Mode,
+    plan: Option<bosun_core::turbo::Plan>,
+) -> &'static str {
+    let Some(dir) = bosun_core::clean::journal_dir() else {
+        return "No place to write the journal.";
+    };
+    if on {
+        return match bosun_core::turbo::restore(&dir) {
+            Ok(r) if r.services_failed > 0 => {
+                "Turbo Boost is off; some services need administrator rights to restart."
+            }
+            Ok(_) => "Turbo Boost is off: your power plan and services are back.",
+            Err(_) => "Couldn't turn Turbo Boost off.",
+        };
+    }
+    let plan = plan.unwrap_or_else(|| crate::pages::turbo::Turbo::open(mode).plan());
+    match bosun_core::turbo::boost(&plan, &dir) {
+        Ok(r) if r.services_failed > 0 && r.services_done == 0 && !plan.services.is_empty() => {
+            "Turbo Boost is on (power plan); stopping services needs administrator rights."
+        }
+        Ok(r) if r.services_failed > 0 => {
+            "Turbo Boost is on; some services need administrator rights."
+        }
+        Ok(r) if r.apps_failed > 0 => "Turbo Boost is on; some apps couldn't be closed.",
+        Ok(_) => "Turbo Boost is on.",
+        Err(_) => "Couldn't turn Turbo Boost on.",
+    }
+}
+
+/// Startup count and tray switches for the Speed Up page.
+fn speed_info() -> crate::pages::speedup::SpeedInfo {
+    crate::pages::speedup::SpeedInfo {
+        optimizable: bosun_core::startup::optimizable(&bosun_core::startup::list()),
+        auto_ram: crate::tray_ini::get("auto_ram_clean", false),
+        monitor: crate::tray_ini::get("widget_visible", true),
+        turbo_on: bosun_core::turbo::State::load().on,
+        turbo_mode: bosun_core::turbo::State::load().mode,
+    }
+}
+
 /// A default-size Care view for layout tests.
 #[cfg(test)]
 pub fn test_view() -> View {
@@ -840,6 +1298,9 @@ pub fn test_view() -> View {
         auto_fix: false,
         picks: crate::scan::ALL,
         manual_t: 0.0,
+        speed: Default::default(),
+        opt: None,
+        turbo: None,
         note: None,
         maximized: false,
     }

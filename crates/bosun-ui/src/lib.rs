@@ -4,6 +4,7 @@
 
 pub mod gfx;
 pub mod layered;
+pub mod snapshot;
 
 use std::cell::Cell;
 

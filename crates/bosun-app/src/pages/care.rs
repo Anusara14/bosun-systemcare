@@ -367,6 +367,9 @@ mod tests {
             auto_fix: false,
             picks: crate::scan::ALL,
             manual_t: 0.0,
+            speed: Default::default(),
+            opt: None,
+            turbo: None,
             note: None,
             maximized: false,
         }

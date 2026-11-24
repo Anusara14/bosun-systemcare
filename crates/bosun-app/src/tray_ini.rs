@@ -1,0 +1,69 @@
+//! Reads and writes the tray's `%APPDATA%\Bosun\tray.ini` (`key=value`
+//! lines), so Speed Up's Real-Time TuneUp switches share the tray's settings.
+//! ponytail: the running tray reads the file at start; live sync needs the
+//! tray↔app pipe from the spec.
+
+use std::path::PathBuf;
+
+fn path() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(r"Bosun\tray.ini"))
+}
+
+/// `key`'s value in `text` as a switch; `default` when absent.
+pub fn get_in(text: &str, key: &str, default: bool) -> bool {
+    text.lines()
+        .filter_map(|l| l.split_once('='))
+        .find(|(k, _)| k.trim() == key)
+        .map_or(default, |(_, v)| v.trim() == "1")
+}
+
+/// `text` with `key` set to `on`, added if missing; other lines untouched.
+pub fn set_in(text: &str, key: &str, on: bool) -> String {
+    let line = format!("{key}={}", u8::from(on));
+    let mut found = false;
+    let mut out: Vec<String> = text
+        .lines()
+        .map(|l| match l.split_once('=') {
+            Some((k, _)) if k.trim() == key => {
+                found = true;
+                line.clone()
+            }
+            _ => l.to_string(),
+        })
+        .collect();
+    if !found {
+        out.push(line);
+    }
+    out.join("\n") + "\n"
+}
+
+pub fn get(key: &str, default: bool) -> bool {
+    path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map_or(default, |t| get_in(&t, key, default))
+}
+
+pub fn set(key: &str, on: bool) -> std::io::Result<()> {
+    let p = path().ok_or_else(|| std::io::Error::other("APPDATA is unset"))?;
+    let text = std::fs::read_to_string(&p).unwrap_or_default();
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(p, set_in(&text, key, on))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_and_rewrites_one_key() {
+        let t = "widget_visible=1\nauto_ram_clean=0\nwidget_x=5\n";
+        assert!(get_in(t, "widget_visible", false));
+        assert!(!get_in(t, "auto_ram_clean", true));
+        assert!(get_in(t, "missing", true));
+        let t2 = set_in(t, "auto_ram_clean", true);
+        assert_eq!(t2, "widget_visible=1\nauto_ram_clean=1\nwidget_x=5\n");
+        assert!(set_in("", "a", true).ends_with("a=1\n"));
+    }
+}

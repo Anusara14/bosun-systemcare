@@ -9,6 +9,7 @@ pub mod extensions;
 pub mod finder;
 pub mod format;
 pub mod homepage;
+pub mod ignore;
 pub mod junk;
 pub mod metrics;
 pub mod paths;

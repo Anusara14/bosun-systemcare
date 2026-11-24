@@ -153,7 +153,8 @@ impl Updater {
                 Ok((v, icons)) => {
                     self.icons = icons.into_iter().map(|i| HICON(i as _)).collect();
                     self.st = vec![St::Idle; v.len()];
-                    self.ignored = vec![false; v.len()];
+                    let ignored = bosun_core::ignore::keys(bosun_core::ignore::List::Update);
+                    self.ignored = v.iter().map(|u| ignored.contains(&u.id)).collect();
                     self.list = Some(v);
                     self.rx = None;
                 }
@@ -210,9 +211,13 @@ impl Updater {
         }
     }
 
+    /// Hides update `i` now and on later checks (Settings > Ignore List).
     pub fn ignore(&mut self, i: usize) {
         if let Some(x) = self.ignored.get_mut(i) {
             *x = true;
+        }
+        if let Some(u) = self.list.as_ref().and_then(|v| v.get(i)) {
+            let _ = bosun_core::ignore::add(bosun_core::ignore::List::Update, &u.id, &u.name);
         }
     }
 

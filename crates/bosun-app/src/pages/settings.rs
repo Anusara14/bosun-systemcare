@@ -21,7 +21,7 @@ const FOOT_Y: f32 = 600.0;
 const PAGE_X: f32 = 265.0;
 
 /// Tree rows: (label, indented). Rows 2..=10 are `MODULES`.
-const TREE: [(&str, bool); 14] = [
+const TREE: [(&str, bool); 15] = [
     ("General Settings", false),
     ("Clean & Optimize", false),
     ("Privacy Sweep", true),
@@ -35,6 +35,7 @@ const TREE: [(&str, bool); 14] = [
     ("Windows Update", true),
     ("Auto RAM Clean", false),
     ("Auto Clean", false),
+    ("Ignore List", false),
     ("Logs & Backup", false),
 ];
 
@@ -131,6 +132,8 @@ pub struct SettingsView {
     pub draft: Values,
     /// (journals, bytes) in the journal folder.
     pub logs: (usize, u64),
+    /// What the user told Bosun to leave alone.
+    pub ignores: Vec<bosun_core::ignore::Entry>,
 }
 
 impl SettingsView {
@@ -141,6 +144,7 @@ impl SettingsView {
             saved: v,
             draft: v,
             logs: logs(),
+            ignores: bosun_core::ignore::load(),
         }
     }
 
@@ -281,7 +285,12 @@ pub fn hit(v: &View, s: &SettingsView, x: f32, y: f32) -> Hit {
             .find(|&k| contains(&tree_row(k), x, y))
             .map_or(Hit::None, |k| Hit::SetNav(k as u8));
     }
-    if s.sel == 13 {
+    if s.sel == IGNORE_PAGE {
+        return (0..s.ignores.len().min(IGNORE_ROWS))
+            .find(|&k| contains(&remove_link(k), x, y))
+            .map_or(Hit::None, |k| Hit::SetUnignore(k as u8));
+    }
+    if s.sel == 14 {
         if contains(&OPEN_BTN, x, y) {
             return Hit::SetOpenLogs;
         }
@@ -293,6 +302,18 @@ pub fn hit(v: &View, s: &SettingsView, x: f32, y: f32) -> Hit {
         .into_iter()
         .find(|(_, cy)| contains(&check_row(v, *cy), x, y))
         .map_or(Hit::None, |(k, _)| Hit::SetCheck(k))
+}
+
+/// The Ignore List page (tree row) and how many entries fit on it.
+const IGNORE_PAGE: u8 = 13;
+const IGNORE_ROWS: usize = 16;
+
+fn ignore_row_y(k: usize) -> f32 {
+    150.0 + 26.0 * k as f32
+}
+
+fn remove_link(k: usize) -> D2D_RECT_F {
+    rect(PAGE_X + 560.0, ignore_row_y(k) - 9.0, 60.0, 18.0)
 }
 
 fn checkbox(p: &Painter, x: f32, cy: f32, on: bool, hot: bool) {
@@ -517,6 +538,63 @@ fn page(p: &Painter, v: &View, s: &SettingsView) {
                 0x8A8A8A,
             );
         }
+        IGNORE_PAGE => {
+            head("Ignore List");
+            para(
+                p,
+                &[
+                    "Bosun leaves these alone: the Startup Optimizer won't suggest them and the",
+                    "Software Updater won't offer them. Remove an item to see it again.",
+                ],
+                PAGE_X,
+                95.3,
+            );
+            if s.ignores.is_empty() {
+                text_at(
+                    p,
+                    "Nothing is ignored.",
+                    &f.m13,
+                    13.0,
+                    PAGE_X,
+                    400.0,
+                    ignore_row_y(0),
+                    0x8A8A8A,
+                );
+            }
+            for (k, e) in s.ignores.iter().take(IGNORE_ROWS).enumerate() {
+                let y = ignore_row_y(k);
+                text_at(p, &e.label, &f.m13, 13.0, PAGE_X, 330.0, y, 0xE6E6E6);
+                text_at(
+                    p,
+                    e.list.label(),
+                    &f.m13,
+                    13.0,
+                    PAGE_X + 340.0,
+                    200.0,
+                    y,
+                    0x8A8A8A,
+                );
+                let hot = v.hover == Hit::SetUnignore(k as u8);
+                let c = if hot { 0x8CC4FF } else { 0x61ADF8 };
+                let w = p.g.measure("Remove", &f.m13);
+                let r = remove_link(k);
+                text_at(p, "Remove", &f.m13, 13.0, r.left, w + 4.0, y, c);
+                p.line(r.left, y + 7.5, r.left + w, y + 7.5, 1.0, col(c));
+            }
+            if s.ignores.len() > IGNORE_ROWS {
+                let more = format!("…and {} more", s.ignores.len() - IGNORE_ROWS);
+                text_at(
+                    p,
+                    &more,
+                    &f.m13,
+                    13.0,
+                    PAGE_X,
+                    300.0,
+                    ignore_row_y(IGNORE_ROWS),
+                    0x8A8A8A,
+                );
+            }
+        }
         _ => {
             head("Logs & Backup");
             para(
@@ -641,6 +719,7 @@ mod tests {
             saved: Values::RECOMMENDED,
             draft: Values::RECOMMENDED,
             logs: (0, 0),
+            ignores: Vec::new(),
         };
         assert_eq!(hit(&v, &s, 100.0, 58.7), Hit::SetNav(0));
         assert_eq!(hit(&v, &s, 100.0, 58.7 + 20.0 * 9.0), Hit::SetNav(9));

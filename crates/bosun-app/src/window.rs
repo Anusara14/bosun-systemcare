@@ -223,6 +223,8 @@ pub enum Hit {
     SetNav(u8),
     SetCheck(u8),
     SetOpenLogs,
+    /// Ignore List: "Remove" on entry k.
+    SetUnignore(u8),
     SetPrune,
     SetQuick,
     SetRecommended,
@@ -1155,6 +1157,16 @@ fn click(hwnd: HWND, h: Hit) {
                         }
                     }
                 }
+                Hit::SetUnignore(k) => {
+                    if let Some(s) = a.settings.as_mut()
+                        && let Some(e) = s.ignores.get(k as usize).cloned()
+                    {
+                        if bosun_core::ignore::remove(e.list, &e.key).is_err() {
+                            a.note = Some(("Couldn't save the Ignore List.", Instant::now()));
+                        }
+                        s.ignores = bosun_core::ignore::load();
+                    }
+                }
                 Hit::SetOpenLogs => {
                     if let Some(d) = bosun_core::clean::journal_dir() {
                         let _ = std::fs::create_dir_all(&d);
@@ -1271,6 +1283,18 @@ fn click(hwnd: HWND, h: Hit) {
                 Hit::OptIgnore(i) => {
                     if let Some(o) = a.opt.as_mut() {
                         o.ignored[i] = true;
+                        let name = o.items[i].name.clone();
+                        let saved = bosun_core::ignore::add(
+                            bosun_core::ignore::List::Startup,
+                            &name,
+                            &name,
+                        );
+                        if saved.is_err() {
+                            a.note = Some((
+                                "Ignored for now; couldn't save the Ignore List.",
+                                Instant::now(),
+                            ));
+                        }
                     }
                 }
                 Hit::OptRefresh => {
@@ -1992,7 +2016,15 @@ fn turbo_toggle(
 /// Startup count and tray switches for the Speed Up page.
 fn speed_info() -> crate::pages::speedup::SpeedInfo {
     crate::pages::speedup::SpeedInfo {
-        optimizable: bosun_core::startup::optimizable(&bosun_core::startup::list()),
+        optimizable: {
+            // ignored items aren't counted (Settings > Ignore List)
+            let ignored = bosun_core::ignore::keys(bosun_core::ignore::List::Startup);
+            let items: Vec<_> = bosun_core::startup::list()
+                .into_iter()
+                .filter(|i| !ignored.contains(&i.name))
+                .collect();
+            bosun_core::startup::optimizable(&items)
+        },
         auto_ram: crate::tray_ini::get("auto_ram_clean", false),
         auto_clean: crate::tray_ini::get("auto_clean", false),
         monitor: crate::tray_ini::get("widget_visible", true),

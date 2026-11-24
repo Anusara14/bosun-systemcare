@@ -323,7 +323,13 @@ impl Optimizer {
         self.free_icons();
         self.items = bosun_core::startup::list();
         self.checked = vec![false; self.items.len()];
-        self.ignored = vec![false; self.items.len()];
+        // the Ignore List (Settings) survives restarts
+        let ignored = bosun_core::ignore::keys(bosun_core::ignore::List::Startup);
+        self.ignored = self
+            .items
+            .iter()
+            .map(|it| ignored.contains(&it.name))
+            .collect();
         self.icons = self.items.iter().map(item_icon).collect();
         self.services = None;
         self.tasks = None;

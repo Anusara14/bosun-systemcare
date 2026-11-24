@@ -18,11 +18,11 @@ use crate::window::{Hit, View};
 /// The switches the panel shows, read when it opens.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Actions {
-    pub on: [bool; 6],
+    pub on: [bool; 7],
 }
 
 /// (title, two lines). Index = switch id.
-const ITEMS: [(&str, [&str; 2]); 6] = [
+const ITEMS: [(&str, [&str; 2]); 7] = [
     (
         "Homepage Advisor",
         [
@@ -65,6 +65,13 @@ const ITEMS: [(&str, [&str; 2]); 6] = [
             "widget and Auto RAM Clean keep working.",
         ],
     ),
+    (
+        "Auto Clean",
+        [
+            "Clean junk files once a day in the background.",
+            "Every run is listed in the Rescue Center.",
+        ],
+    ),
 ];
 
 /// (heading, switch ids), left column then right, two rows.
@@ -72,7 +79,7 @@ const SECTIONS: [(&str, &[usize]); 4] = [
     ("Security", &[0, 1]),
     ("Clean", &[2]),
     ("Performance", &[3, 4]),
-    ("Automatic", &[5]),
+    ("Automatic", &[5, 6]),
 ];
 
 impl Actions {
@@ -87,6 +94,7 @@ impl Actions {
                 m.widget,
                 m.auto_ram,
                 m.tray_start,
+                crate::tray_ini::get("auto_clean", false),
             ],
         }
     }
@@ -112,7 +120,8 @@ pub fn set(k: usize, on: bool) -> Result<(), &'static str> {
             .map_err(|_| "Couldn't save Auto Fix."),
         3 => crate::pages::menu::flip(&m, 0),
         4 => crate::pages::menu::flip(&m, 2),
-        _ => crate::pages::menu::flip(&m, 1),
+        5 => crate::pages::menu::flip(&m, 1),
+        _ => crate::tray_ini::set("auto_clean", on).map_err(|_| "Couldn't save Auto Clean."),
     }
 }
 

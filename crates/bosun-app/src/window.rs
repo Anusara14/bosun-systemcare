@@ -1313,6 +1313,7 @@ fn click(hwnd: HWND, h: Hit) {
                 Hit::Toggle(i) => {
                     let (key, on) = match i {
                         0 => ("auto_ram_clean", !a.speed.auto_ram),
+                        2 => ("auto_clean", !a.speed.auto_clean),
                         _ => ("widget_visible", !a.speed.monitor),
                     };
                     match crate::tray_ini::set(key, on) {
@@ -1983,6 +1984,7 @@ fn speed_info() -> crate::pages::speedup::SpeedInfo {
     crate::pages::speedup::SpeedInfo {
         optimizable: bosun_core::startup::optimizable(&bosun_core::startup::list()),
         auto_ram: crate::tray_ini::get("auto_ram_clean", false),
+        auto_clean: crate::tray_ini::get("auto_clean", false),
         monitor: crate::tray_ini::get("widget_visible", true),
         turbo_on: bosun_core::turbo::State::load().on,
         turbo_mode: bosun_core::turbo::State::load().mode,

@@ -21,7 +21,7 @@ const FOOT_Y: f32 = 600.0;
 const PAGE_X: f32 = 265.0;
 
 /// Tree rows: (label, indented). Rows 2..=10 are `MODULES`.
-const TREE: [(&str, bool); 13] = [
+const TREE: [(&str, bool); 14] = [
     ("General Settings", false),
     ("Clean & Optimize", false),
     ("Privacy Sweep", true),
@@ -34,6 +34,7 @@ const TREE: [(&str, bool); 13] = [
     ("Disk Optimization", true),
     ("Windows Update", true),
     ("Auto RAM Clean", false),
+    ("Auto Clean", false),
     ("Logs & Backup", false),
 ];
 
@@ -85,6 +86,8 @@ pub struct Values {
     pub tray_start: bool,
     pub widget: bool,
     pub auto_ram: bool,
+    /// Junk files cleaned once a day by the tray.
+    pub auto_clean: bool,
     /// A System Restore point before each Fix.
     pub restore_point: bool,
     /// Care scan modules (bit i = `MODULES[i]`).
@@ -96,6 +99,7 @@ impl Values {
         tray_start: true,
         widget: true,
         auto_ram: false,
+        auto_clean: false,
         restore_point: false,
         picks: DEFAULT_PICKS,
     };
@@ -106,6 +110,7 @@ impl Values {
             tray_start: m.tray_start,
             widget: m.widget,
             auto_ram: m.auto_ram,
+            auto_clean: crate::tray_ini::get("auto_clean", false),
             restore_point: crate::tray_ini::get_from(crate::tray_ini::APP, "restore_point", false),
             picks: saved_picks(),
         }
@@ -147,6 +152,7 @@ impl SettingsView {
             1 => d.widget = !d.widget,
             2 => d.auto_ram = !d.auto_ram,
             3 => d.restore_point = !d.restore_point,
+            4 => d.auto_clean = !d.auto_clean,
             k => d.picks ^= 1 << (k - 10),
         }
     }
@@ -171,6 +177,10 @@ impl SettingsView {
         }
         if d.auto_ram != s.auto_ram {
             crate::pages::menu::flip(&info, 2)?;
+        }
+        if d.auto_clean != s.auto_clean {
+            crate::tray_ini::set("auto_clean", d.auto_clean)
+                .map_err(|_| "Couldn't save Auto Clean.")?;
         }
         if d.restore_point != s.restore_point {
             crate::tray_ini::set_to(crate::tray_ini::APP, "restore_point", d.restore_point)
@@ -204,6 +214,7 @@ fn checks(sel: u8) -> Vec<(u8, f32)> {
             .collect(),
         2..=10 => vec![(10 + sel - 2, 142.0)],
         11 => vec![(2, 142.0)],
+        12 => vec![(4, 142.0)],
         _ => Vec::new(),
     }
 }
@@ -270,7 +281,7 @@ pub fn hit(v: &View, s: &SettingsView, x: f32, y: f32) -> Hit {
             .find(|&k| contains(&tree_row(k), x, y))
             .map_or(Hit::None, |k| Hit::SetNav(k as u8));
     }
-    if s.sel == 12 {
+    if s.sel == 13 {
         if contains(&OPEN_BTN, x, y) {
             return Hit::SetOpenLogs;
         }
@@ -302,6 +313,7 @@ fn check_line(p: &Painter, v: &View, s: &SettingsView, k: u8, cy: f32, label: &s
         1 => s.draft.widget,
         2 => s.draft.auto_ram,
         3 => s.draft.restore_point,
+        4 => s.draft.auto_clean,
         k => s.draft.picks & 1 << (k - 10) != 0,
     };
     let hot = v.hover == Hit::SetCheck(k);
@@ -468,6 +480,42 @@ fn page(p: &Painter, v: &View, s: &SettingsView) {
                 95.3,
             );
             check_line(p, v, s, 2, 142.0, "Enable Auto RAM Clean");
+        }
+        12 => {
+            head("Auto Clean");
+            para(
+                p,
+                &[
+                    "Once a day the Bosun tray cleans junk files (temporary files, caches, logs),",
+                    "the safe module. Browser data is never touched. Each run is in the Rescue Center.",
+                ],
+                PAGE_X,
+                95.3,
+            );
+            check_line(
+                p,
+                v,
+                s,
+                4,
+                142.0,
+                "Clean junk files automatically every day",
+            );
+            let last = crate::tray_ini::get_number("auto_clean_last")
+                .filter(|&t| t > 0)
+                .map_or_else(
+                    || "Last run: never".to_string(),
+                    |t| format!("Last run: {}", crate::pages::rescue::when(t * 1000)),
+                );
+            text_at(
+                p,
+                &last,
+                &f.m13,
+                13.0,
+                PAGE_X + 15.0,
+                400.0,
+                166.0,
+                0x8A8A8A,
+            );
         }
         _ => {
             head("Logs & Backup");

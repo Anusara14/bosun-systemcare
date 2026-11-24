@@ -85,7 +85,7 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
 }
 
 /// `Nov 24, 13:37` in local time.
-fn when(ms: u64) -> String {
+pub(crate) fn when(ms: u64) -> String {
     use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
     use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
     // 100 ns ticks since 1601

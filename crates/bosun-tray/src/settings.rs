@@ -11,6 +11,9 @@ pub struct Settings {
     pub widget_pinned: bool,
     /// The widget is drawn see-through.
     pub widget_transparent: bool,
+    /// Auto Clean: junk files once a day, and when it last ran (unix secs).
+    pub auto_clean: bool,
+    pub auto_clean_last: u64,
 }
 
 impl Default for Settings {
@@ -21,6 +24,8 @@ impl Default for Settings {
             auto_ram_clean: false,
             widget_pinned: true,
             widget_transparent: false,
+            auto_clean: false,
+            auto_clean_last: 0,
         }
     }
 }
@@ -55,6 +60,8 @@ impl Settings {
                 "auto_ram_clean" => s.auto_ram_clean = v.trim() == "1",
                 "widget_pinned" => s.widget_pinned = v.trim() != "0",
                 "widget_transparent" => s.widget_transparent = v.trim() == "1",
+                "auto_clean" => s.auto_clean = v.trim() == "1",
+                "auto_clean_last" => s.auto_clean_last = v.trim().parse().unwrap_or(0),
                 "widget_x" => x = v.trim().parse().ok(),
                 "widget_y" => y = v.trim().parse().ok(),
                 _ => {}
@@ -72,6 +79,11 @@ impl Settings {
             u8::from(self.widget_pinned),
             u8::from(self.widget_transparent)
         );
+        out.push_str(&format!(
+            "auto_clean={}\nauto_clean_last={}\n",
+            u8::from(self.auto_clean),
+            self.auto_clean_last
+        ));
         if let Some((x, y)) = self.widget_pos {
             out.push_str(&format!("widget_x={x}\nwidget_y={y}\n"));
         }
@@ -106,6 +118,8 @@ mod tests {
             auto_ram_clean: true,
             widget_pinned: false,
             widget_transparent: true,
+            auto_clean: true,
+            auto_clean_last: 1_795_000_000,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

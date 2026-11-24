@@ -58,6 +58,28 @@ fn activate_existing(r: window::Request) -> bool {
     }
 }
 
+/// `--auto-clean` (started by the tray once a day): cleans junk files, the
+/// safe module, journal first, with no window, then exits. One at a time.
+fn auto_clean() {
+    // SAFETY: a named mutex held for this process's short life.
+    let only = unsafe { CreateMutexW(None, true, w!(r"Local\Bosun.SystemCare.AutoClean")) };
+    // SAFETY: reads this thread's last error right after the call.
+    if only.is_err() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        return;
+    }
+    if let Some(dir) = bosun_core::clean::journal_dir() {
+        let targets = bosun_core::junk::targets();
+        let _ = bosun_core::clean::clean(
+            &targets,
+            &dir,
+            "Auto Clean",
+            // test hook: BOSUN_FIX_DRYRUN=1 walks and journals but deletes nothing
+            std::env::var_os("BOSUN_FIX_DRYRUN").is_some(),
+            &mut |_, _| true,
+        );
+    }
+}
+
 fn run() -> Result<()> {
     // SAFETY: standard Win32 start-up sequence on the UI thread.
     unsafe {
@@ -78,6 +100,9 @@ fn run() -> Result<()> {
 }
 
 fn main() {
+    if std::env::args().any(|a| a == "--auto-clean") {
+        return auto_clean();
+    }
     if let Err(e) = run() {
         let text = HSTRING::from(format!("Bosun SystemCare could not start.\n\n{e}"));
         // SAFETY: modal error box with owned strings.

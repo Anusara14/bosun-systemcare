@@ -43,6 +43,8 @@ const WM_CLEANED: u32 = WM_APP + 4;
 /// Auto RAM Clean: trigger at this load, at most this often.
 const AUTO_CLEAN_PCT: u32 = 85;
 const AUTO_CLEAN_GAP: std::time::Duration = std::time::Duration::from_secs(600);
+/// Auto Clean (junk files) runs at most this often.
+const AUTO_JUNK_EVERY_SECS: u64 = 24 * 60 * 60;
 const TICK: usize = 1;
 
 /// Everything that changes windows is posted as a command and run from the host
@@ -206,6 +208,26 @@ fn set_rate(monitor_open: bool) {
     };
 }
 
+/// Starts the daily Auto Clean when it's due: `bosun.exe --auto-clean` does
+/// the work and exits, so the cleaner never lives in the tray.
+fn auto_junk_clean() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let due = with_state(|s| {
+        let due = s.settings.auto_clean
+            && now.saturating_sub(s.settings.auto_clean_last) >= AUTO_JUNK_EVERY_SECS;
+        if due {
+            s.settings.auto_clean_last = now;
+            s.settings.save();
+        }
+        due
+    });
+    if due == Some(true) {
+        shell::open_main_args("--auto-clean");
+    }
+}
+
 fn tick() {
     let open = monitor::is_open();
     let auto = with_state(|s| {
@@ -216,6 +238,7 @@ fn tick() {
     if auto == Some(true) {
         post(Cmd::CleanRam);
     }
+    auto_junk_clean();
     widget::render();
     if open {
         monitor::invalidate();

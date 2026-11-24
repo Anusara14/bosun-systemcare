@@ -66,6 +66,15 @@ pub fn notify_tray() {
     }
 }
 
+/// A number from `tray.ini` (the tray writes Auto Clean's last run there).
+pub fn get_number(key: &str) -> Option<u64> {
+    let text = std::fs::read_to_string(path(TRAY)?).ok()?;
+    text.lines()
+        .filter_map(|l| l.split_once('='))
+        .find(|(k, _)| k.trim() == key)
+        .and_then(|(_, v)| v.trim().parse().ok())
+}
+
 pub fn get_from(file: &str, key: &str, default: bool) -> bool {
     path(file)
         .and_then(|p| std::fs::read_to_string(p).ok())

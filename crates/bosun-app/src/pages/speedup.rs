@@ -45,6 +45,8 @@ pub struct SpeedInfo {
     /// tray.ini: Auto RAM Clean, and the floating widget (Performance Monitor).
     pub auto_ram: bool,
     pub monitor: bool,
+    /// tray.ini: Auto Clean (junk files once a day).
+    pub auto_clean: bool,
     /// Turbo Boost is on, and its mode.
     pub turbo_on: bool,
     pub turbo_mode: bosun_core::turbo::Mode,
@@ -109,7 +111,7 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
         }
     }
     let rt = card(v, 4);
-    for row in 0..2 {
+    for row in 0..3 {
         let t = toggle(&rt, row);
         if contains(&rect(t.left - 4.0, t.top - 4.0, 40.0, 22.0), x, y) {
             return Hit::Toggle(row as u8);
@@ -374,6 +376,7 @@ fn draw_tuneup(p: &Painter, v: &View, c: &D2D_RECT_F) {
     let rows = [
         ("Auto RAM Clean", v.speed.auto_ram),
         ("Performance Monitor", v.speed.monitor),
+        ("Auto Clean (daily)", v.speed.auto_clean),
     ];
     for (i, (label, on)) in rows.iter().enumerate() {
         let y = c.top + 103.5 + 22.0 * i as f32;

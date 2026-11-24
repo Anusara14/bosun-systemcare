@@ -129,6 +129,8 @@ enum Hit {
     Tab(Tab),
     Section(usize),
     Row(String),
+    /// "Open" on a recently closed app (its key).
+    Reopen(String),
     Clean,
     Scan,
     Turbo,
@@ -152,7 +154,7 @@ struct Monitor {
     content_h: f32,
     hover: Hit,
     checked: HashSet<String>,
-    collapsed: [bool; 2],
+    collapsed: [bool; 3],
     toast: Option<(String, Instant)>,
     hidden_at: Option<Instant>,
     turbo: bool,
@@ -267,7 +269,7 @@ fn new_state(hwnd: HWND) -> Monitor {
         content_h: 0.0,
         hover: Hit::None,
         checked: HashSet::new(),
-        collapsed: [false, false],
+        collapsed: [false, false, false],
         toast: None,
         hidden_at: None,
         turbo: false,
@@ -356,7 +358,7 @@ fn paint(m: &mut Monitor, data: &Data, hdc: windows::Win32::Graphics::Gdi::HDC) 
         draw_frame(p, m);
         draw_tabs(p, m, data);
         match m.tab {
-            t if t.is_process() => draw_processes(p, m, &data.groups),
+            t if t.is_process() => draw_processes(p, m, data),
             Tab::Metrics => draw_metrics(p, data),
             _ => draw_network(p, data),
         }
@@ -385,7 +387,7 @@ fn tab_rect(i: usize) -> D2D_RECT_F {
 
 // ---------- input ----------
 
-fn hit(m: &Monitor, groups: &[Group], x: f32, y: f32) -> Hit {
+fn hit(m: &Monitor, data: &Data, x: f32, y: f32) -> Hit {
     let (bx, by, br) = BACK;
     if (x - bx).hypot(y - by) <= br + 2.0 {
         return Hit::Back;
@@ -411,10 +413,16 @@ fn hit(m: &Monitor, groups: &[Group], x: f32, y: f32) -> Hit {
     if m.tab.is_process() && y > LIST_TOP && y < LIST_BOTTOM && x > FRAME_L && x < 498.0 {
         let i = ((y - LIST_TOP + m.scroll) / ROW_H).floor();
         if i >= 0.0 {
-            return match lines(groups, m.tab, m.collapsed).get(i as usize) {
+            let row_y = LIST_TOP + i * ROW_H - m.scroll;
+            return match lines(data, m.tab, m.collapsed).get(i as usize) {
                 Some(Line::Section { idx, .. }) => Hit::Section(*idx),
                 Some(Line::Row(g)) => Hit::Row(g.key.clone()),
-                None => Hit::None,
+                Some(Line::Closed(c))
+                    if c.path.is_some() && contains(&reopen_rect(row_y), x, y) =>
+                {
+                    Hit::Reopen(c.key.clone())
+                }
+                Some(Line::Closed(_)) | None => Hit::None,
             };
         }
     }
@@ -461,6 +469,17 @@ fn click(m: &mut Monitor, h: Hit) {
             m.scroll = 0.0;
         }
         Hit::Section(i) => m.collapsed[i] = !m.collapsed[i],
+        Hit::Reopen(key) => {
+            // relaunch it, and it leaves the list
+            let path = with_state(|s| {
+                let i = s.data.closed.iter().position(|c| c.key == key)?;
+                s.data.closed.remove(i).path
+            })
+            .flatten();
+            if let Some(path) = path {
+                tools::open_path(&path);
+            }
+        }
         Hit::Row(key) => {
             let protected =
                 with_state(|s| s.data.groups.iter().any(|g| g.key == key && g.protected));
@@ -518,8 +537,7 @@ fn track_leave(hwnd: HWND) {
 }
 
 fn on_mouse(hwnd: HWND, msg: u32, lp: LPARAM, wp: WPARAM) {
-    let hit_at =
-        |m: &Monitor, x, y| with_state(|s| hit(m, &s.data.groups, x, y)).unwrap_or(Hit::None);
+    let hit_at = |m: &Monitor, x, y| with_state(|s| hit(m, &s.data, x, y)).unwrap_or(Hit::None);
     let changed = with_mon(|m| match msg {
         WM_MOUSEMOVE => {
             let (x, y) = coords(lp, m.dpi);
@@ -639,6 +657,10 @@ mod tests {
     fn hit_test_matches_reference_layout() {
         let m = new_state(HWND(std::ptr::null_mut()));
         let gs = vec![g("a", 10, 0.0, true)];
+        let gs = Data {
+            groups: gs,
+            ..Data::default()
+        };
         assert_eq!(hit(&m, &gs, 478.0, 18.0), Hit::Back);
         assert_eq!(hit(&m, &gs, 501.0, 18.0), Hit::Close);
         assert_eq!(hit(&m, &gs, 160.0, 90.0), Hit::Tab(Tab::Cpu));
@@ -646,5 +668,66 @@ mod tests {
         assert_eq!(hit(&m, &gs, 100.0, 214.0), Hit::Row("a".into()));
         assert_eq!(hit(&m, &gs, 450.0, 365.0), Hit::EndTask);
         assert_eq!(hit(&m, &gs, 30.0, 365.0), Hit::Clean);
+    }
+
+    /// Renders the RAM tab with a recently closed app:
+    /// `cargo test -p bosun-tray monitor_snapshot -- --ignored`
+    #[test]
+    #[ignore]
+    fn monitor_snapshot() {
+        // SAFETY: COM for this test thread, then the drawing factories.
+        let _ = unsafe {
+            windows::Win32::System::Com::CoInitializeEx(
+                None,
+                windows::Win32::System::Com::COINIT_APARTMENTTHREADED,
+            )
+        };
+        crate::bosun_ui_init_for_tests();
+        let mut m = new_state(HWND::default());
+        let g = |key: &str, mem: u64, win: bool| bosun_core::procs::Group {
+            key: key.into(),
+            name: key.into(),
+            path: None,
+            pids: vec![1],
+            private_bytes: mem,
+            cpu_pct: 0.0,
+            io_bps: 0,
+            has_window: win,
+            protected: false,
+        };
+        let data = Data {
+            groups: vec![
+                g("Google Chrome", 1_600_000_000, true),
+                g("Claude", 780_000_000, true),
+                g("svchost", 90_000_000, false),
+            ],
+            closed: vec![crate::Closed {
+                key: "notepad".into(),
+                name: "Notepad".into(),
+                path: Some(
+                    r"C:\Windows
+otepad.exe"
+                        .into(),
+                ),
+                at: Instant::now() - Duration::from_secs(180),
+            }],
+            ..Data::default()
+        };
+        let out = std::env::var("BOSUN_SNAPSHOT_DIR").unwrap_or_else(|_| ".".into());
+        bosun_ui::snapshot::save_png(
+            graphics(),
+            W as u32,
+            H as u32,
+            col(mc::BG),
+            &std::path::Path::new(&out).join("monitor-recent.png"),
+            |p| {
+                draw_title(p, &m);
+                draw_frame(p, &m);
+                draw_tabs(p, &m, &data);
+                draw_processes(p, &mut m, &data);
+                draw_footer(p, &m);
+            },
+        )
+        .unwrap();
     }
 }

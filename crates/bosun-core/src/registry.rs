@@ -317,6 +317,10 @@ pub fn fix(
     Ok((done, left))
 }
 
+/// Tests that run `reg.exe` take turns: two at once make it fail now and then.
+#[cfg(test)]
+pub(crate) static REG_TOOL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,6 +342,7 @@ mod tests {
     /// backs up and removes the orphan through the same code paths.
     #[test]
     fn removes_only_the_orphan_after_backing_up() {
+        let _one = REG_TOOL.lock().unwrap_or_else(|e| e.into_inner());
         use windows::Win32::System::Registry::{
             KEY_ALL_ACCESS, REG_OPTION_NON_VOLATILE, REG_SZ, RegCreateKeyExW, RegSetValueExW,
         };

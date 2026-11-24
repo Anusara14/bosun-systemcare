@@ -14,6 +14,8 @@ pub(super) enum Line<'a> {
         collapsed: bool,
     },
     Row(&'a Group),
+    /// "Recently closed" (RAM tab): an app that went away, with Open.
+    Closed(&'a crate::Closed),
 }
 
 pub(super) fn metric(g: &Group, tab: Tab) -> f64 {
@@ -48,10 +50,27 @@ pub(super) fn section_titles(tab: Tab) -> [&'static str; 2] {
     }
 }
 
-/// Section rows + process rows, sorted by the active tab's metric.
-pub(super) fn lines(groups: &[Group], tab: Tab, collapsed: [bool; 2]) -> Vec<Line<'_>> {
+/// Section index of "Recently closed" (drawn between the other two).
+pub(super) const CLOSED_SECTION: usize = 2;
+
+/// Section rows + process rows, sorted by the active tab's metric; on the
+/// RAM tab, apps closed recently sit between the two process sections.
+pub(super) fn lines<'a>(data: &'a Data, tab: Tab, collapsed: [bool; 3]) -> Vec<Line<'a>> {
+    let groups = &data.groups;
     let mut out = Vec::new();
     for (idx, title) in section_titles(tab).into_iter().enumerate() {
+        if idx == 1 && tab == Tab::Ram && !data.closed.is_empty() {
+            let n = data.closed.len();
+            out.push(Line::Section {
+                idx: CLOSED_SECTION,
+                title: "Recently closed",
+                total: format!("{n} app{}", if n == 1 { "" } else { "s" }),
+                collapsed: collapsed[CLOSED_SECTION],
+            });
+            if !collapsed[CLOSED_SECTION] {
+                out.extend(data.closed.iter().map(Line::Closed));
+            }
+        }
         let mut rows: Vec<&Group> = groups
             .iter()
             .filter(|g| g.has_window == (idx == 0))
@@ -96,14 +115,15 @@ pub(super) fn header(p: &Painter, left: &str, right: &str) {
     }
 }
 
-pub(super) fn draw_processes(p: &Painter, m: &mut Monitor, groups: &[Group]) {
+pub(super) fn draw_processes(p: &Painter, m: &mut Monitor, data: &Data) {
+    let groups = &data.groups;
     let col_name = match m.tab {
         Tab::Cpu => "CPU",
         Tab::Disk => "Disk I/O",
         _ => "RAM",
     };
     header(p, "Processes", col_name);
-    let ls = lines(groups, m.tab, m.collapsed);
+    let ls = lines(data, m.tab, m.collapsed);
     let view = LIST_BOTTOM - LIST_TOP;
     m.content_h = ls.len() as f32 * ROW_H;
     m.scroll = m.scroll.clamp(0.0, (m.content_h - view).max(0.0));
@@ -121,6 +141,7 @@ pub(super) fn draw_processes(p: &Painter, m: &mut Monitor, groups: &[Group]) {
                 collapsed,
             } => draw_section(p, m, *idx, y, (title, total), *collapsed),
             Line::Row(g) => draw_row(p, m, g, y),
+            Line::Closed(c) => draw_closed(p, m, c, y),
         }
     }
     p.unclip();
@@ -193,8 +214,47 @@ pub(super) fn draw_section(
     }
 }
 
+/// The Open link on a "Recently closed" row.
+pub(super) fn reopen_rect(y: f32) -> D2D_RECT_F {
+    rect(436.0, y, 40.0, ROW_H)
+}
+
+/// "just now", "4 min ago".
+pub(super) fn ago(at: Instant) -> String {
+    match at.elapsed().as_secs() / 60 {
+        0 => "closed just now".into(),
+        m => format!("closed {m} min ago"),
+    }
+}
+
+pub(super) fn draw_closed(p: &Painter, m: &mut Monitor, c: &crate::Closed, y: f32) {
+    let f = &p.g.f;
+    let hot = m.hover == Hit::Reopen(c.key.clone());
+    hover_fill(p, hot, row_band(y));
+    let ir = rect(45.0, y + 7.0, 16.0, 16.0);
+    match c.path.as_deref().and_then(|path| path_icon(m, path)) {
+        Some(b) => p.bitmap(&b, ir, 0.55),
+        None => p.fill_rr(ir, 3.0, col(0x2E2E2E)),
+    }
+    let nr = rect(66.0, y, COL_VALUE_X - 76.0, ROW_H);
+    p.text(&c.name, &f.m12, nr, col(mc::TEXT_2), Align::Left);
+    let vr = rect(COL_VALUE_X, y, 160.0, ROW_H);
+    p.text(&ago(c.at), &f.m12, vr, col(mc::TEXT_3), Align::Left);
+    if c.path.is_some() {
+        let lr = reopen_rect(y);
+        let lc = col(if hot { 0xFFFFFF } else { mc::ACCENT });
+        p.text("Open", &f.m12, lr, lc, Align::Left);
+        let w = p.g.measure("Open", &f.m12);
+        p.line(lr.left, y + 21.5, lr.left + w, y + 21.5, 1.0, lc);
+    }
+}
+
 pub(super) fn row_icon(m: &mut Monitor, g: &Group) -> Option<ID2D1Bitmap> {
-    let path = g.path.as_ref()?;
+    path_icon(m, g.path.as_ref()?)
+}
+
+fn path_icon(m: &mut Monitor, path: &str) -> Option<ID2D1Bitmap> {
+    let path = &path.to_string();
     let rt = crate::layered::shared_target()?;
     m.icons
         .entry(path.clone())
@@ -361,18 +421,57 @@ mod tests {
             g("b", 30, 1.0, true),
             g("c", 5, 0.0, false),
         ];
-        let ram = lines(&gs, Tab::Ram, [false, false]);
+        let gs = Data {
+            groups: gs,
+            ..Data::default()
+        };
+        let ram = lines(&gs, Tab::Ram, [false, false, false]);
         assert!(matches!(ram[0], Line::Section { idx: 0, title, .. } if title.contains("RAM")));
         assert!(matches!(ram[1], Line::Row(r) if r.key == "b"));
         assert!(matches!(ram[3], Line::Section { idx: 1, .. }));
-        let cpu = lines(&gs, Tab::Cpu, [false, false]);
+        let cpu = lines(&gs, Tab::Cpu, [false, false, false]);
         assert!(matches!(cpu[1], Line::Row(r) if r.key == "a"));
+    }
+
+    #[test]
+    fn recently_closed_sits_between_on_the_ram_tab_only() {
+        let data = Data {
+            groups: vec![g("a", 10, 0.0, true), g("c", 5, 0.0, false)],
+            closed: vec![crate::Closed {
+                key: "notepad".into(),
+                name: "Notepad".into(),
+                path: Some(
+                    r"C:\Windows
+otepad.exe"
+                        .into(),
+                ),
+                at: Instant::now(),
+            }],
+            ..Data::default()
+        };
+        let ram = lines(&data, Tab::Ram, [false, false, false]);
+        assert!(matches!(
+            ram[2],
+            Line::Section {
+                idx: CLOSED_SECTION,
+                ..
+            }
+        ));
+        assert!(matches!(ram[3], Line::Closed(c) if c.key == "notepad"));
+        assert!(matches!(ram[4], Line::Section { idx: 1, .. }));
+        let cpu = lines(&data, Tab::Cpu, [false, false, false]);
+        assert!(!cpu.iter().any(|l| matches!(l, Line::Closed(_))));
+        assert_eq!(ago(Instant::now()), "closed just now");
     }
 
     #[test]
     fn collapsed_sections_hide_rows() {
         let gs = vec![g("a", 10, 0.0, true), g("c", 5, 0.0, false)];
-        assert_eq!(lines(&gs, Tab::Ram, [true, false]).len(), 3);
+        let gs = Data {
+            groups: gs,
+            ..Data::default()
+        };
+        assert_eq!(lines(&gs, Tab::Ram, [true, false, false]).len(), 3);
     }
 
     #[test]

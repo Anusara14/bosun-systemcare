@@ -540,6 +540,9 @@ mod tests {
 
     #[test]
     fn restores_a_registry_clean_from_its_backup() {
+        let _one = crate::registry::REG_TOOL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use windows::Win32::System::Registry::{
             HKEY_CURRENT_USER, REG_SZ, RegCreateKeyW, RegDeleteTreeW, RegDeleteValueW,
             RegSetValueExW,

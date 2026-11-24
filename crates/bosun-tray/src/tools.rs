@@ -23,6 +23,11 @@ pub fn toggle_turbo() -> Result<bool, &'static str> {
     Ok(true)
 }
 
+/// Starts a program (the monitor's "Open" on a recently closed app).
+pub fn open_path(path: &str) {
+    open(path);
+}
+
 fn open(target: &str) {
     // SAFETY: plain ShellExecute with owned strings.
     unsafe {

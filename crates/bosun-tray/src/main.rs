@@ -104,11 +104,49 @@ pub struct AdapterRate {
     pub link_bps: u64,
 }
 
+/// An app that closed while the monitor was watching (End Task, or quit).
+#[derive(Clone, Debug)]
+pub struct Closed {
+    pub key: String,
+    pub name: String,
+    pub path: Option<String>,
+    pub at: Instant,
+}
+
+/// "Recently closed" keeps this many, for this long.
+const CLOSED_KEEP: usize = 5;
+const CLOSED_FOR: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 #[derive(Default)]
 pub struct Data {
     pub vitals: Vitals,
     pub groups: Vec<Group>,
     pub adapters: Vec<AdapterRate>,
+    /// Newest first.
+    pub closed: Vec<Closed>,
+}
+
+/// Apps (windowed, not protected) in `before` but gone from `after` join
+/// `closed` (newest first); reopened or stale ones leave it.
+fn note_closed(closed: &mut Vec<Closed>, before: &[Group], after: &[Group], now: Instant) {
+    for g in before.iter().filter(|g| g.has_window && !g.protected) {
+        if !after.iter().any(|f| f.key == g.key) {
+            closed.retain(|c| c.key != g.key);
+            closed.insert(
+                0,
+                Closed {
+                    key: g.key.clone(),
+                    name: g.name.clone(),
+                    path: g.path.clone(),
+                    at: now,
+                },
+            );
+        }
+    }
+    closed.retain(|c| {
+        !after.iter().any(|f| f.key == c.key) && now.saturating_duration_since(c.at) < CLOSED_FOR
+    });
+    closed.truncate(CLOSED_KEEP);
 }
 
 pub struct State {
@@ -125,12 +163,23 @@ impl State {
     fn tick(&mut self, full: bool) {
         self.data.vitals = self.sampler.tick(full);
         if full {
-            self.data.groups = self.table.refresh();
+            let fresh = self.table.refresh();
+            // the first refresh after opening has nothing to compare with
+            if !self.data.groups.is_empty() {
+                note_closed(
+                    &mut self.data.closed,
+                    &self.data.groups,
+                    &fresh,
+                    Instant::now(),
+                );
+            }
+            self.data.groups = fresh;
             self.sample_adapters();
         } else if !self.data.groups.is_empty() {
             // Monitor closed: give the memory back.
             self.data = Data {
                 vitals: self.data.vitals,
+                closed: std::mem::take(&mut self.data.closed),
                 ..Data::default()
             };
             self.prev_adapters = Vec::new();
@@ -506,6 +555,12 @@ fn main() {
     }
 }
 
+/// Drawing factories for tests that render (once per test thread).
+#[cfg(test)]
+fn bosun_ui_init_for_tests() {
+    bosun_ui::init().expect("drawing factories");
+}
+
 #[cfg(test)]
 mod tests {
     use super::Cmd;
@@ -516,6 +571,30 @@ mod tests {
             assert_eq!(Cmd::from_usize(c as usize), Some(c));
         }
         assert_eq!(Cmd::from_usize(0), None);
+    }
+
+    #[test]
+    fn closed_apps_are_remembered_and_reopened_ones_forgotten() {
+        use bosun_core::procs::Group;
+        let g = |key: &str, window: bool| Group {
+            key: key.into(),
+            name: key.into(),
+            path: None,
+            pids: vec![1],
+            private_bytes: 0,
+            cpu_pct: 0.0,
+            io_bps: 0,
+            has_window: window,
+            protected: false,
+        };
+        let now = std::time::Instant::now();
+        let mut closed = Vec::new();
+        let before = [g("notepad", true), g("svc", false)];
+        super::note_closed(&mut closed, &before, &[], now);
+        assert_eq!(closed.len(), 1, "background processes aren't apps");
+        assert_eq!(closed[0].key, "notepad");
+        super::note_closed(&mut closed, &[], &[g("notepad", true)], now);
+        assert!(closed.is_empty(), "reopened");
     }
 
     #[test]

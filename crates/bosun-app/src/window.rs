@@ -1140,6 +1140,8 @@ fn click(hwnd: HWND, h: Hit) {
                         },
                         Instant::now(),
                     ));
+                    // a Turbo Boost restore changes what Speed Up shows
+                    a.speed = speed_info();
                     let scroll = a.rescue.scroll;
                     a.rescue = crate::pages::rescue::RescueView::load();
                     a.rescue.scroll = scroll;
@@ -1238,10 +1240,7 @@ fn click(hwnd: HWND, h: Hit) {
                     match crate::tray_ini::set(key, on) {
                         Ok(()) => {
                             a.speed = speed_info();
-                            a.note = Some((
-                                "Saved. The tray applies it the next time it starts.",
-                                Instant::now(),
-                            ));
+                            a.note = Some(("Saved.", Instant::now()));
                         }
                         Err(_) => a.note = Some(("Couldn't save the setting.", Instant::now())),
                     }

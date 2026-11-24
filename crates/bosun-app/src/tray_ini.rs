@@ -48,7 +48,22 @@ pub fn get(key: &str, default: bool) -> bool {
 }
 
 pub fn set(key: &str, on: bool) -> std::io::Result<()> {
-    set_to(TRAY, key, on)
+    set_to(TRAY, key, on)?;
+    notify_tray();
+    Ok(())
+}
+
+/// Asks a running tray to re-read `tray.ini` (its `Cmd::Reload`, posted as
+/// `WM_APP + 3`). No tray running: nothing to do, it reads the file at start.
+fn notify_tray() {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_APP};
+    // SAFETY: finds the tray's host window by class and posts it a message.
+    unsafe {
+        if let Ok(h) = FindWindowW(windows::core::w!("BosunTrayHost"), None) {
+            let _ = PostMessageW(Some(h), WM_APP + 3, WPARAM(11), LPARAM(0));
+        }
+    }
 }
 
 pub fn get_from(file: &str, key: &str, default: bool) -> bool {

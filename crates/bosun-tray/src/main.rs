@@ -61,6 +61,9 @@ pub enum Cmd {
     CleanRam,
     /// Monitor's close button: hide the monitor and the floating widget.
     Dismiss,
+    /// The main window changed `tray.ini`: read it again and apply it.
+    /// Fixed at 11: the app posts this number.
+    Reload = 11,
 }
 
 impl Cmd {
@@ -76,6 +79,7 @@ impl Cmd {
             Exit,
             Refresh,
             CleanRam,
+            Reload,
         ]
         .into_iter()
         .find(|c| *c as usize == v)
@@ -265,6 +269,27 @@ You can bring it back any time from the Bosun icon in the system tray.");
             }
         }
         Cmd::Menu => tray::show_menu(),
+        Cmd::Reload => {
+            // keep the widget where the user dragged it; take everything else
+            let fresh = Settings::load();
+            let shown = with_state(|s| {
+                let pos = s.settings.widget_pos;
+                s.settings = Settings {
+                    widget_pos: pos,
+                    ..fresh
+                };
+                s.settings.widget_visible
+            });
+            match shown {
+                Some(true) => {
+                    widget::show();
+                    widget::apply_pin();
+                    widget::refresh();
+                }
+                Some(false) => widget::hide(),
+                None => {}
+            }
+        }
         Cmd::Refresh => tick(),
         Cmd::CleanRam => clean_ram(),
         // SAFETY: destroying our own host window ends the message loop.
@@ -429,5 +454,15 @@ mod tests {
             assert_eq!(Cmd::from_usize(c as usize), Some(c));
         }
         assert_eq!(Cmd::from_usize(0), None);
+    }
+
+    #[test]
+    fn reload_is_the_number_the_app_posts() {
+        // bosun-app's tray_ini::notify_tray posts WM_APP + 3 with 11
+        assert_eq!(
+            super::WM_CMD,
+            windows::Win32::UI::WindowsAndMessaging::WM_APP + 3
+        );
+        assert_eq!(Cmd::from_usize(11), Some(Cmd::Reload));
     }
 }

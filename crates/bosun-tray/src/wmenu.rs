@@ -34,6 +34,8 @@ const MAIN_W: f32 = 126.0;
 const SUB_W: [f32; 2] = [126.0, 176.0];
 const GAP: f32 = 2.0;
 const ROW: f32 = 27.3;
+/// Fallback close: checks for a click outside when we never got the focus.
+const WATCH_TIMER: usize = 1;
 const W: f32 = MAIN_W + GAP + 176.0;
 const H: f32 = 7.0 * ROW + 1.0;
 
@@ -257,6 +259,7 @@ pub fn show() {
         let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER);
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
+        windows::Win32::UI::WindowsAndMessaging::SetTimer(Some(hwnd), WATCH_TIMER, 80, None);
     }
 }
 
@@ -358,6 +361,31 @@ fn click(spot: Spot) {
     }
 }
 
+/// Windows may refuse us the foreground (then no WM_ACTIVATE ever comes): a
+/// mouse button held down while the pointer is off our panels closes the menu
+/// like any other menu.
+fn clicked_elsewhere(hwnd: HWND) -> bool {
+    use windows::Win32::Graphics::Gdi::ScreenToClient;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+    // SAFETY: plain state queries on our own window.
+    unsafe {
+        if GetForegroundWindow() == hwnd {
+            return false; // WM_ACTIVATE handles this case
+        }
+        let down = |k: u16| GetAsyncKeyState(k as i32) as u16 & 0x8000 != 0;
+        if !down(VK_LBUTTON.0) && !down(VK_RBUTTON.0) {
+            return false;
+        }
+        let mut pt = POINT::default();
+        let _ = GetCursorPos(&mut pt);
+        let _ = ScreenToClient(hwnd, &mut pt);
+        let dpi = GetDpiForWindow(hwnd).max(96);
+        let (x, y) = (gfx::dip(pt.x, dpi), gfx::dip(pt.y, dpi));
+        with_menu(|m| spot_at(x, y, m.sub)).flatten().is_none()
+    }
+}
+
 fn local(hwnd: HWND, lp: LPARAM) -> (f32, f32) {
     // SAFETY: our own window.
     let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
@@ -400,6 +428,12 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
         }
         WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize => {
             hide();
+            return LRESULT(0);
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_TIMER if wp.0 == WATCH_TIMER => {
+            if clicked_elsewhere(hwnd) {
+                hide();
+            }
             return LRESULT(0);
         }
         _ => {}

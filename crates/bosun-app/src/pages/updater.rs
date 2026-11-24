@@ -53,7 +53,8 @@ pub struct UpdView {
 #[derive(Default)]
 pub struct Updater {
     list: Option<Vec<Update>>,
-    rx: Option<Receiver<Vec<Update>>>,
+    /// winget's list and each row's icon (an HICON as `isize`, 0 for none).
+    rx: Option<Receiver<(Vec<Update>, Vec<isize>)>>,
     icons: Vec<HICON>,
     st: Vec<St>,
     ignored: Vec<bool>,
@@ -62,13 +63,37 @@ pub struct Updater {
     job: Option<(usize, Receiver<bool>)>,
 }
 
+/// The installed app a winget row is about: the same name (any case), else
+/// one name continuing the other at a word break ("Audacity" ~ "Audacity
+/// 3.7.8"). Never a bare prefix ("Go" is not "Google Chrome") or an empty name.
+fn same_app(winget: &str, installed: &str) -> bool {
+    let (a, b) = (
+        winget.trim().to_lowercase(),
+        installed.trim().to_lowercase(),
+    );
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    let (short, long) = if a.len() <= b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    short == long
+        || (short.len() >= 3
+            && long.starts_with(short.as_str())
+            && long[short.len()..].starts_with([' ', '(', '-']))
+}
+
 fn icon_for(name: &str, apps: &[bosun_core::apps::App]) -> HICON {
     use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
     use windows::Win32::UI::Shell::{SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW};
     use windows::core::HSTRING;
-    let Some(path) = apps
+    let exact = apps
         .iter()
-        .find(|a| a.name == name || a.name.starts_with(name) || name.starts_with(&a.name))
+        .find(|a| a.name.trim().eq_ignore_ascii_case(name.trim()));
+    let Some(path) = exact
+        .or_else(|| apps.iter().find(|a| same_app(name, &a.name)))
         .and_then(|a| a.icon.clone())
         .filter(|p| p.exists())
     else {
@@ -95,8 +120,15 @@ impl Updater {
             return;
         }
         let (tx, rx) = channel();
+        // winget, the installed-app scan and the icons all stay off the UI thread
         std::thread::spawn(move || {
-            let _ = tx.send(bosun_core::updater::list().unwrap_or_default());
+            let v = bosun_core::updater::list().unwrap_or_default();
+            let apps = bosun_core::apps::list();
+            let icons = v
+                .iter()
+                .map(|u| icon_for(&u.name, &apps).0 as isize)
+                .collect();
+            let _ = tx.send((v, icons));
         });
         self.rx = Some(rx);
     }
@@ -118,9 +150,8 @@ impl Updater {
     pub fn poll(&mut self) -> bool {
         if let Some(rx) = &self.rx {
             match rx.try_recv() {
-                Ok(v) => {
-                    let apps = bosun_core::apps::list();
-                    self.icons = v.iter().map(|u| icon_for(&u.name, &apps)).collect();
+                Ok((v, icons)) => {
+                    self.icons = icons.into_iter().map(|i| HICON(i as _)).collect();
                     self.st = vec![St::Idle; v.len()];
                     self.ignored = vec![false; v.len()];
                     self.list = Some(v);
@@ -390,6 +421,16 @@ pub fn draw(p: &Painter, v: &View) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matches_installed_apps_without_grabbing_lookalikes() {
+        assert!(same_app("VLC media player", "vlc media player"));
+        assert!(same_app("Audacity", "Audacity 3.7.8"));
+        assert!(same_app("Zoom Workplace (64-bit)", "Zoom Workplace"));
+        assert!(!same_app("Go", "Google Chrome"));
+        assert!(!same_app("Git", "GitHub Desktop"));
+        assert!(!same_app("Blender", ""));
+    }
 
     #[test]
     fn rows_and_buttons_sit_where_the_reference_has_them() {

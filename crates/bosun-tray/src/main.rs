@@ -25,7 +25,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW, GetMessageW,
-    IDYES, MB_ICONERROR, MB_ICONQUESTION, MB_YESNO, MSG, MessageBoxW, PostMessageW,
+    IDYES, MB_ICONERROR, MB_ICONQUESTION, MB_ICONWARNING, MB_YESNO, MSG, MessageBoxW, PostMessageW,
     PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SetTimer, TranslateMessage,
     WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW,
     WS_POPUP,
@@ -64,6 +64,12 @@ pub enum Cmd {
     /// The main window changed `tray.ini`: read it again and apply it.
     /// Fixed at 11: the app posts this number.
     Reload = 11,
+    /// Tray menu: start a Care scan in the main window.
+    Scan = 12,
+    /// Tray menu: Turbo Boost on or off (the journaled one).
+    Turbo = 13,
+    /// Tray menu: the main window's Settings dialog.
+    OpenSettings = 14,
 }
 
 impl Cmd {
@@ -80,6 +86,9 @@ impl Cmd {
             Refresh,
             CleanRam,
             Reload,
+            Scan,
+            Turbo,
+            OpenSettings,
         ]
         .into_iter()
         .find(|c| *c as usize == v)
@@ -256,6 +265,22 @@ You can bring it back any time from the Bosun icon in the system tray.");
             exec(Cmd::HideMonitor);
         }
         Cmd::OpenMain => shell::open_main_app("care"),
+        Cmd::Scan => shell::open_main_args("--scan"),
+        Cmd::OpenSettings => shell::open_main_args("--settings"),
+        Cmd::Turbo => {
+            if let Err(e) = tools::toggle_turbo() {
+                // SAFETY: modal message owned by the host window.
+                unsafe {
+                    MessageBoxW(
+                        Some(host()),
+                        &HSTRING::from(e),
+                        w!("Bosun SystemCare"),
+                        MB_ICONWARNING,
+                    );
+                }
+            }
+            monitor::invalidate();
+        }
         Cmd::ToggleWidget => {
             let visible = with_state(|s| {
                 s.settings.widget_visible = !s.settings.widget_visible;

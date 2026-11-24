@@ -23,6 +23,9 @@ const ID_OPEN: usize = 100;
 const ID_MONITOR: usize = 101;
 const ID_WIDGET: usize = 102;
 const ID_EXIT: usize = 103;
+const ID_SCAN: usize = 104;
+const ID_TURBO: usize = 105;
+const ID_SETTINGS: usize = 106;
 
 fn base() -> NOTIFYICONDATAW {
     NOTIFYICONDATAW {
@@ -95,6 +98,9 @@ pub fn menu_command(id: usize) -> Option<Cmd> {
         ID_MONITOR => Some(Cmd::ShowMonitor),
         ID_WIDGET => Some(Cmd::ToggleWidget),
         ID_EXIT => Some(Cmd::Exit),
+        ID_SCAN => Some(Cmd::Scan),
+        ID_TURBO => Some(Cmd::Turbo),
+        ID_SETTINGS => Some(Cmd::OpenSettings),
         _ => None,
     }
 }
@@ -113,17 +119,25 @@ pub fn show_menu() {
         let item = |flags: MENU_ITEM_FLAGS, id: usize, text: PCWSTR| {
             let _ = AppendMenuW(menu, flags, id, text);
         };
-        item(main_flags, ID_OPEN, w!("Open Bosun SystemCare"));
-        item(MF_STRING, ID_MONITOR, w!("Performance Monitor"));
-        item(
-            if widget_on {
+        // spec order: Open · Scan now · Turbo Boost · Performance Monitor ·
+        // Show widget · Settings · Exit
+        let checked = |on: bool| {
+            if on {
                 MF_STRING | MF_CHECKED
             } else {
                 MF_STRING
-            },
-            ID_WIDGET,
-            w!("Floating widget"),
+            }
+        };
+        item(main_flags, ID_OPEN, w!("Open Bosun SystemCare"));
+        item(main_flags, ID_SCAN, w!("Scan now"));
+        item(
+            checked(crate::tools::turbo_on()),
+            ID_TURBO,
+            w!("Turbo Boost"),
         );
+        item(MF_STRING, ID_MONITOR, w!("Performance Monitor"));
+        item(checked(widget_on), ID_WIDGET, w!("Show widget"));
+        item(main_flags, ID_SETTINGS, w!("Settings"));
         item(MF_SEPARATOR, 0, PCWSTR::null());
         item(MF_STRING, ID_EXIT, w!("Exit"));
         let _ = SetMenuDefaultItem(menu, ID_MONITOR as u32, 0);

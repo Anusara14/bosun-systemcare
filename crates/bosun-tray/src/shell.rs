@@ -18,6 +18,11 @@ pub fn main_app_path() -> Option<PathBuf> {
 }
 
 pub fn open_main_app(page: &str) {
+    open_main_args(&format!("--page {page}"));
+}
+
+/// Starts (or, if open, re-targets) the main window with `args`.
+pub fn open_main_args(args: &str) {
     let Some(p) = main_app_path() else { return };
     // SAFETY: plain ShellExecute with owned wide strings.
     unsafe {
@@ -25,7 +30,7 @@ pub fn open_main_app(page: &str) {
             None,
             w!("open"),
             &HSTRING::from(p.as_os_str()),
-            &HSTRING::from(format!("--page {page}")),
+            &HSTRING::from(args),
             None,
             SW_SHOWNORMAL,
         );

@@ -31,6 +31,67 @@ use crate::pages::{self, Page};
 use crate::{backdrop, chrome, frame};
 
 pub const CLASS: PCWSTR = w!("BosunMain");
+
+/// A second launch hands its `Request` to the running window (wParam).
+pub const WM_REQUEST: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 20;
+
+/// What a launch asks for: a page, a Care scan, the Settings dialog.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Request {
+    pub page: Option<Page>,
+    pub scan: bool,
+    pub settings: bool,
+}
+
+impl Request {
+    /// Low 4 bits: page index + 1 (0 = none); bit 4 scan; bit 5 settings.
+    pub fn encode(self) -> usize {
+        let page = self
+            .page
+            .and_then(|p| pages::ALL.iter().position(|&q| q == p))
+            .map_or(0, |i| i + 1);
+        page | usize::from(self.scan) << 4 | usize::from(self.settings) << 5
+    }
+
+    pub fn decode(v: usize) -> Self {
+        Request {
+            page: (v & 0xF)
+                .checked_sub(1)
+                .and_then(|i| pages::ALL.get(i).copied()),
+            scan: v & 1 << 4 != 0,
+            settings: v & 1 << 5 != 0,
+        }
+    }
+}
+
+/// Carries out a launch request in an open window: a scan starts on Care
+/// (unless one is already running), a page opens with its data loaded.
+fn apply_request(hwnd: HWND, r: Request) {
+    with_app(|a| {
+        a.menu = None;
+        a.about = false;
+        a.bell = None;
+        if r.page.is_some() || r.scan {
+            a.opt = None;
+            a.turbo = None;
+            a.tools = false;
+            a.settings = None;
+        }
+    });
+    if r.scan {
+        click(hwnd, Hit::Nav(Page::Care));
+        if with_app(|a| a.scan.is_none()) == Some(true) {
+            // SAFETY: one-shot timer on our own window (presses SCAN).
+            unsafe { SetTimer(Some(hwnd), SCRIPT_SCAN, 300, None) };
+        }
+    } else if let Some(p) = r.page {
+        click(hwnd, Hit::Nav(p));
+    }
+    if r.settings {
+        with_app(|a| a.settings = Some(crate::pages::settings::SettingsView::open()));
+    }
+    invalidate(hwnd);
+}
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_NCMOUSELEAVE: u32 = 0x02A2;
 const SPIN_TIMER: usize = 1;
@@ -346,8 +407,8 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
     }
 }
 
-pub fn create(page: Page) -> Result<()> {
-    // the saved skin; capture hook: BOSUN_LIGHT=1 forces the light skin
+pub fn create(request: Request) -> Result<()> {
+    let page = request.page.unwrap_or(Page::Care); // the saved skin; capture hook: BOSUN_LIGHT=1 forces the light skin
     bosun_ui::gfx::set_light(
         std::env::var_os("BOSUN_LIGHT").is_some()
             || crate::tray_ini::get_from(crate::tray_ini::APP, "light_skin", false),
@@ -485,6 +546,12 @@ pub fn create(page: Page) -> Result<()> {
         if page == Page::Updater {
             with_app(|a| a.updater.load());
             SetTimer(Some(hwnd), UPDATE_TIMER, 250, None);
+        }
+        if request.settings {
+            with_app(|a| a.settings = Some(crate::pages::settings::SettingsView::open()));
+        }
+        if request.scan {
+            SetTimer(Some(hwnd), SCRIPT_SCAN, 300, None);
         }
         // capture hook: BOSUN_SNAPSHOT=<png> draws the first view off-screen at
         // the reference size, saves it and exits without showing the window
@@ -1603,6 +1670,10 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             let _ = unsafe { KillTimer(Some(hwnd), wp.0) };
             click(hwnd, Hit::Mode(Mode::Manual));
         }
+        WM_REQUEST => {
+            apply_request(hwnd, Request::decode(wp.0));
+            return LRESULT(0);
+        }
         WM_TIMER if wp.0 == SCRIPT_SCAN => {
             // SAFETY: one-shot test-hook timer on our own window.
             let _ = unsafe { KillTimer(Some(hwnd), wp.0) };
@@ -1882,7 +1953,7 @@ fn turbo_toggle(
             Err(_) => "Couldn't turn Turbo Boost off.",
         };
     }
-    let plan = plan.unwrap_or_else(|| crate::pages::turbo::Turbo::open(mode).plan());
+    let plan = plan.unwrap_or_else(|| bosun_core::turbo::recommended(mode));
     match bosun_core::turbo::boost(&plan, &dir) {
         Ok(r) if r.services_failed > 0 && r.services_done == 0 && !plan.services.is_empty() => {
             "Turbo Boost is on (power plan); stopping services needs administrator rights."
@@ -1947,6 +2018,30 @@ pub fn idle_view() -> View {
 #[cfg(test)]
 mod tests {
     use super::hover_ease;
+
+    #[test]
+    fn launch_requests_survive_the_trip() {
+        use super::{Page, Request};
+        for r in [
+            Request::default(),
+            Request {
+                page: Some(Page::Rescue),
+                ..Default::default()
+            },
+            Request {
+                page: Some(Page::Care),
+                scan: true,
+                settings: false,
+            },
+            Request {
+                page: None,
+                scan: false,
+                settings: true,
+            },
+        ] {
+            assert_eq!(Request::decode(r.encode()), r);
+        }
+    }
 
     #[test]
     fn mode_easing_tracks_the_reference_samples() {

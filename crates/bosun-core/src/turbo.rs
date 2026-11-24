@@ -218,6 +218,24 @@ pub struct Plan {
     pub power: bool,
 }
 
+/// The plan Turbo Boost's "Recommended" picks: Windows' optional system
+/// services that are present, except search indexing; no other services or
+/// apps; the mode's power plan. Shared by the main window and the tray.
+pub fn recommended(mode: Mode) -> Plan {
+    let all = crate::services::list();
+    Plan {
+        mode,
+        services: SYSTEM_SERVICES
+            .iter()
+            .filter(|n| !n.eq_ignore_ascii_case("WSearch"))
+            .filter_map(|n| all.iter().find(|s| s.name.eq_ignore_ascii_case(n)))
+            .map(|s| s.name.clone())
+            .collect(),
+        apps: Vec::new(),
+        power: true,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Report {
     pub services_done: usize,

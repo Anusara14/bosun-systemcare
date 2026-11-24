@@ -23,17 +23,22 @@ use windows::core::{HSTRING, Result, w};
 
 use crate::pages::Page;
 
-/// `--page speedup` etc. (the tray opens specific pages this way).
-fn start_page() -> Page {
+/// `--page speedup`, `--scan`, `--settings` (the tray opens the app this way).
+fn request() -> window::Request {
     let args: Vec<String> = std::env::args().collect();
-    args.windows(2)
-        .find(|w| w[0] == "--page")
-        .and_then(|w| Page::from_arg(&w[1]))
-        .unwrap_or(Page::Care)
+    window::Request {
+        page: args
+            .windows(2)
+            .find(|w| w[0] == "--page")
+            .and_then(|w| Page::from_arg(&w[1])),
+        scan: args.iter().any(|a| a == "--scan"),
+        settings: args.iter().any(|a| a == "--settings"),
+    }
 }
 
-/// Brings an already-running main window to the front instead of opening a second one.
-fn activate_existing() -> bool {
+/// Brings an already-running main window to the front instead of opening a
+/// second one, and hands it this launch's request.
+fn activate_existing(r: window::Request) -> bool {
     // SAFETY: plain window lookup/activation by our own class name.
     unsafe {
         let Ok(h) = FindWindowW(window::CLASS, None) else {
@@ -43,6 +48,12 @@ fn activate_existing() -> bool {
             let _ = ShowWindow(h, SW_RESTORE);
         }
         let _ = SetForegroundWindow(h);
+        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+            Some(h),
+            window::WM_REQUEST,
+            windows::Win32::Foundation::WPARAM(r.encode()),
+            windows::Win32::Foundation::LPARAM(0),
+        );
         true
     }
 }
@@ -51,12 +62,12 @@ fn run() -> Result<()> {
     // SAFETY: standard Win32 start-up sequence on the UI thread.
     unsafe {
         let _mutex = CreateMutexW(None, true, w!("Local\\Bosun.SystemCare.App"))?;
-        if GetLastError() == ERROR_ALREADY_EXISTS && activate_existing() {
+        if GetLastError() == ERROR_ALREADY_EXISTS && activate_existing(request()) {
             return Ok(());
         }
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         bosun_ui::init()?;
-        window::create(start_page())?;
+        window::create(request())?;
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);

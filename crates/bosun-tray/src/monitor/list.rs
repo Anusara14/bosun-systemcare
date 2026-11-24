@@ -195,7 +195,7 @@ pub(super) fn draw_section(
 
 pub(super) fn row_icon(m: &mut Monitor, g: &Group) -> Option<ID2D1Bitmap> {
     let path = g.path.as_ref()?;
-    let rt = m.rt.as_ref().map(|(rt, _)| rt.clone())?;
+    let rt = crate::layered::shared_target()?;
     m.icons
         .entry(path.clone())
         .or_insert_with(|| {

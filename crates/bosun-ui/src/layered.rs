@@ -28,8 +28,67 @@ pub struct Surface {
     old: HGDIOBJ,
     pub w: i32,
     pub h: i32,
-    rt: ID2D1DCRenderTarget,
-    br: ID2D1SolidColorBrush,
+    dpi: u32,
+}
+
+thread_local! {
+    /// One render target for every surface on this thread. Software targets
+    /// run on WARP, which compiles a shader per kind of shape on each device:
+    /// sharing the device means each is compiled once (MBs, not per window).
+    static SHARED: std::cell::RefCell<Option<(ID2D1DCRenderTarget, ID2D1SolidColorBrush)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn shared() -> Result<(ID2D1DCRenderTarget, ID2D1SolidColorBrush)> {
+    SHARED.with(|s| {
+        if let Some(t) = s.borrow().as_ref() {
+            return Ok(t.clone());
+        }
+        let props = D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            usage: D2D1_RENDER_TARGET_USAGE_NONE,
+            minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+        };
+        // SAFETY: plain factory calls; the target lives for the thread.
+        let t = unsafe {
+            let rt = graphics().d2d.CreateDCRenderTarget(&props)?;
+            rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            let br = rt.CreateSolidColorBrush(&col(tok::TEXT), None)?;
+            (rt, br)
+        };
+        *s.borrow_mut() = Some(t.clone());
+        Ok(t)
+    })
+}
+
+/// The thread's shared render target, for resources drawn through it
+/// (bitmaps made with `Gfx::icon_bitmap`).
+pub fn shared_target() -> Option<ID2D1RenderTarget> {
+    shared().ok().map(|(rt, _)| rt.into())
+}
+
+/// Gives back what the shared target holds (WARP's device and its compiled
+/// shaders) and returns freed heap pages to Windows. For when a big window
+/// such as the monitor closes; the next frame rebuilds a small target.
+pub fn release() {
+    reset_shared();
+    // SAFETY: compacting our own process heap; no pointers are invalidated.
+    unsafe {
+        if let Ok(h) = windows::Win32::System::Memory::GetProcessHeap() {
+            let _ = windows::Win32::System::Memory::HeapCompact(h, Default::default());
+        }
+    }
+}
+
+/// Drops the shared target (after a failed draw it is rebuilt on next use).
+fn reset_shared() {
+    SHARED.with(|s| *s.borrow_mut() = None);
 }
 
 impl Drop for Surface {
@@ -66,29 +125,56 @@ impl Surface {
             let dib = CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)?;
             let dc = CreateCompatibleDC(None);
             let old = SelectObject(dc, dib.into());
-            let props = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-                pixelFormat: D2D1_PIXEL_FORMAT {
-                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-                },
-                dpiX: dpi as f32,
-                dpiY: dpi as f32,
-                usage: D2D1_RENDER_TARGET_USAGE_NONE,
-                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-            };
-            let rt = graphics().d2d.CreateDCRenderTarget(&props)?;
-            rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            let br = rt.CreateSolidColorBrush(&col(tok::TEXT), None)?;
             Ok(Self {
                 dc,
                 dib,
                 old,
                 w: pw,
                 h: ph,
-                rt,
-                br,
+                dpi,
             })
+        }
+    }
+
+    /// Draws a frame with `f` into the surface only (see `blit`). False if
+    /// drawing failed; the shared target is rebuilt on the next frame.
+    pub fn draw(&self, f: impl FnOnce(&Painter)) -> bool {
+        // SAFETY: binds the shared target to our DIB and draws one frame.
+        unsafe {
+            let rc = RECT {
+                left: 0,
+                top: 0,
+                right: self.w,
+                bottom: self.h,
+            };
+            let Ok((target, br)) = shared() else {
+                return false;
+            };
+            target.SetDpi(self.dpi as f32, self.dpi as f32);
+            if target.BindDC(self.dc, &rc).is_err() {
+                return false;
+            }
+            target.BeginDraw();
+            let rt: &ID2D1RenderTarget = &target;
+            f(&Painter {
+                rt,
+                br: &br,
+                g: graphics(),
+            });
+            if target.EndDraw(None, None).is_err() {
+                reset_shared();
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Copies the last frame to `hdc` at (0, 0) (for ordinary windows).
+    pub fn blit(&self, hdc: HDC) {
+        use windows::Win32::Graphics::Gdi::{BitBlt, SRCCOPY};
+        // SAFETY: copies between two live DCs.
+        unsafe {
+            let _ = BitBlt(hdc, 0, 0, self.w, self.h, Some(self.dc), 0, 0, SRCCOPY);
         }
     }
 
@@ -100,27 +186,11 @@ impl Surface {
 
     /// `present` with the whole window drawn at `alpha` (255 = opaque).
     pub fn present_alpha(&self, hwnd: HWND, alpha: u8, f: impl FnOnce(&Painter)) -> bool {
-        // SAFETY: draws into our DIB, then hands it to the layered window.
+        if !self.draw(f) {
+            return false;
+        }
+        // SAFETY: hands our finished DIB to the layered window.
         unsafe {
-            let rc = RECT {
-                left: 0,
-                top: 0,
-                right: self.w,
-                bottom: self.h,
-            };
-            if self.rt.BindDC(self.dc, &rc).is_err() {
-                return false;
-            }
-            self.rt.BeginDraw();
-            let rt: &ID2D1RenderTarget = &self.rt;
-            f(&Painter {
-                rt,
-                br: &self.br,
-                g: graphics(),
-            });
-            if self.rt.EndDraw(None, None).is_err() {
-                return false;
-            }
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 SourceConstantAlpha: alpha,

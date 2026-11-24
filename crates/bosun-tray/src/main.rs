@@ -133,6 +133,7 @@ impl State {
             };
             self.prev_adapters = Vec::new();
             self.table.release();
+            crate::layered::release();
         }
     }
 
@@ -398,6 +399,8 @@ fn run() -> Result<()> {
             }
             return Ok(());
         }
+        // no text input anywhere in the tray: skip the IME and its ~7 MB
+        let _ = windows::Win32::UI::Input::Ime::ImmDisableIME(u32::MAX);
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         shell::enable_dark_menus();
         bosun_ui::init()?;
@@ -432,10 +435,12 @@ fn run() -> Result<()> {
 
         let settings = Settings::load();
         let widget_visible = settings.widget_visible;
+        let sampler = VitalsSampler::new();
+        let table = ProcessTable::new();
         STATE.with(|s| {
             *s.borrow_mut() = Some(State {
-                sampler: VitalsSampler::new(),
-                table: ProcessTable::new(),
+                sampler,
+                table,
                 prev_adapters: Vec::new(),
                 prev_at: Instant::now(),
                 data: Data::default(),

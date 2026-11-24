@@ -10,12 +10,8 @@ use std::time::{Duration, Instant};
 use bosun_core::format;
 use bosun_core::procs::{Group, end_task, trim_working_sets};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D_SIZE_U};
-use windows::Win32::Graphics::Direct2D::{
-    D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_PRESENT_OPTIONS_NONE, D2D1_RENDER_TARGET_PROPERTIES,
-    D2D1_RENDER_TARGET_TYPE_SOFTWARE, ID2D1Bitmap, ID2D1HwndRenderTarget, ID2D1RenderTarget,
-    ID2D1SolidColorBrush,
-};
+use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
+use windows::Win32::Graphics::Direct2D::ID2D1Bitmap;
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
     DWMWCP_ROUND, DwmSetWindowAttribute,
@@ -28,11 +24,11 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::Shell::{SHFILEINFOW, SHGFI_ICON, SHGFI_SMALLICON, SHGetFileInfoW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DROPSHADOW, CreateWindowExW, DefWindowProcW, DestroyIcon, GetClientRect, GetCursorPos,
-    GetWindowRect, HICON, HTCAPTION, HTCLIENT, HWND_TOPMOST, IDC_ARROW, LoadCursorW,
-    RegisterClassExW, SW_HIDE, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow,
-    WA_INACTIVE, WM_ACTIVATE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCHITTEST, WM_PAINT, WM_SIZE, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CS_DROPSHADOW, CreateWindowExW, DefWindowProcW, DestroyIcon, GetCursorPos, GetWindowRect,
+    HICON, HTCAPTION, HTCLIENT, HWND_TOPMOST, IDC_ARROW, LoadCursorW, RegisterClassExW, SW_HIDE,
+    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, WA_INACTIVE, WM_ACTIVATE,
+    WM_DPICHANGED, WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_PAINT,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{HSTRING, w};
 
@@ -147,7 +143,9 @@ struct Monitor {
     hwnd: HWND,
     dpi: u32,
     visible: bool,
-    rt: Option<(ID2D1HwndRenderTarget, ID2D1SolidColorBrush)>,
+    /// Off-screen frame, drawn through the thread's shared render target
+    /// (one WARP device for the widget, popups and monitor), then copied in.
+    surf: Option<crate::layered::Surface>,
     icons: HashMap<String, Option<ID2D1Bitmap>>,
     tab: Tab,
     scroll: f32,
@@ -262,7 +260,7 @@ fn new_state(hwnd: HWND) -> Monitor {
         hwnd,
         dpi: 96,
         visible: false,
-        rt: None,
+        surf: None,
         icons: HashMap::new(),
         tab: Tab::Ram,
         scroll: 0.0,
@@ -307,7 +305,7 @@ pub fn hide() {
     let Some(hwnd) = with_mon(|m| {
         m.visible = false;
         m.hidden_at = Some(Instant::now());
-        m.rt = None;
+        m.surf = None;
         m.icons = HashMap::new();
         m.checked.clear();
         m.toast = None;
@@ -319,42 +317,17 @@ pub fn hide() {
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
+    // the monitor's frame, icons and shaders were the bulk of our memory
+    crate::layered::release();
 }
 
 // ---------- painting ----------
 
 fn ensure_target(m: &mut Monitor) -> bool {
-    if m.rt.is_some() {
-        return true;
+    if m.surf.is_none() {
+        m.surf = crate::layered::Surface::new(W, H, m.dpi).ok();
     }
-    let mut rc = RECT::default();
-    // SAFETY: render target bound to our own window's client area.
-    unsafe {
-        let _ = GetClientRect(m.hwnd, &mut rc);
-        // Software rendering: a GPU device would load ~50 MB of driver for a small flyout.
-        let props = D2D1_RENDER_TARGET_PROPERTIES {
-            r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
-            dpiX: m.dpi as f32,
-            dpiY: m.dpi as f32,
-            ..Default::default()
-        };
-        let hp = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-            hwnd: m.hwnd,
-            pixelSize: D2D_SIZE_U {
-                width: rc.right as u32,
-                height: rc.bottom as u32,
-            },
-            presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-        };
-        let Ok(rt) = graphics().d2d.CreateHwndRenderTarget(&props, &hp) else {
-            return false;
-        };
-        let Ok(br) = rt.CreateSolidColorBrush(&col(mc::TEXT), None) else {
-            return false;
-        };
-        m.rt = Some((rt, br));
-    }
-    true
+    m.surf.is_some()
 }
 
 fn file_icon(path: &str) -> Option<HICON> {
@@ -372,34 +345,26 @@ fn file_icon(path: &str) -> Option<HICON> {
     (r != 0 && !sfi.hIcon.is_invalid()).then_some(sfi.hIcon)
 }
 
-fn paint(m: &mut Monitor, data: &Data) {
+fn paint(m: &mut Monitor, data: &Data, hdc: windows::Win32::Graphics::Gdi::HDC) {
     if !ensure_target(m) {
         return;
     }
-    let Some((rt, br)) = m.rt.clone() else { return };
-    // SAFETY: Begin/EndDraw pair on our render target.
-    unsafe { rt.BeginDraw() };
-    {
-        let base: &ID2D1RenderTarget = &rt;
-        let p = Painter {
-            rt: base,
-            br: &br,
-            g: graphics(),
-        };
+    let Some(surf) = m.surf.take() else { return };
+    let ok = surf.draw(|p| {
         p.clear(col(mc::BG));
-        draw_title(&p, m);
-        draw_frame(&p, m);
-        draw_tabs(&p, m, data);
+        draw_title(p, m);
+        draw_frame(p, m);
+        draw_tabs(p, m, data);
         match m.tab {
-            t if t.is_process() => draw_processes(&p, m, &data.groups),
-            Tab::Metrics => draw_metrics(&p, data),
-            _ => draw_network(&p, data),
+            t if t.is_process() => draw_processes(p, m, &data.groups),
+            Tab::Metrics => draw_metrics(p, data),
+            _ => draw_network(p, data),
         }
-        draw_footer(&p, m);
-    }
-    // SAFETY: ends the frame; a lost device is recreated next paint.
-    if unsafe { rt.EndDraw(None, None) }.is_err() {
-        m.rt = None;
+        draw_footer(p, m);
+    });
+    if ok {
+        surf.blit(hdc);
+        m.surf = Some(surf);
     }
 }
 
@@ -609,9 +574,9 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             MONITOR.with(|mm| {
                 if let Ok(mut g) = mm.try_borrow_mut()
                     && let Some(m) = g.as_mut()
-                    && with_data(|d| paint(m, d)).is_none()
+                    && with_data(|d| paint(m, d, ps.hdc)).is_none()
                 {
-                    paint(m, &Data::default());
+                    paint(m, &Data::default(), ps.hdc);
                 }
             });
             // SAFETY: matches BeginPaint above.
@@ -630,25 +595,11 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 post(Cmd::HideMonitor);
             }
         }
-        WM_SIZE => {
-            let (w, h) = ((lp.0 & 0xFFFF) as u32, ((lp.0 >> 16) & 0xFFFF) as u32);
-            with_mon(|m| {
-                if let Some((rt, _)) = &m.rt {
-                    // SAFETY: resizing our render target to the new client size.
-                    let _ = unsafe {
-                        rt.Resize(&D2D_SIZE_U {
-                            width: w,
-                            height: h,
-                        })
-                    };
-                }
-            });
-        }
         WM_DPICHANGED => {
             let dpi = (wp.0 & 0xFFFF) as u32;
             with_mon(|m| {
                 m.dpi = dpi;
-                m.rt = None;
+                m.surf = None;
                 m.icons = HashMap::new();
             });
             // SAFETY: lParam points at the suggested RECT for the new DPI.

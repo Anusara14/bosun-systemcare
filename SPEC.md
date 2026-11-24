@@ -7,8 +7,10 @@ No IObit code, artwork, rule databases or text is reused. Feature names are para
 
 | Binary | Runs | Job | Memory budget (private bytes) |
 |---|---|---|---|
-| `bosun-tray.exe` | Always (autostart, unelevated) | Tray icon, floating widget, Performance Monitor popup, launches the main window | < 5 MB |
+| `bosun-tray.exe` | Always (autostart, unelevated) | Tray icon, floating widget, Performance Monitor popup, launches the main window | < 10 MB at rest |
 | `bosun.exe` | On demand (admin manifest), exits when closed | Main window, all scans and fixes, settings | < 30 MB while open |
+
+The tray's floor is Direct2D's software renderer (WARP keeps ~6 MB of compiled shaders for the process lifetime); a GPU target would cost ~50 MB of driver. Measured: 9.9 MB median at rest, ~19 MB with the Performance Monitor open.
 
 They talk over a named pipe (`\\.\pipe\bosun`). Messages: `Open(page)`, `TurboToggle`, `ScanNow`.
 Shared code lives in the `bosun-core` crate: system operations, the rules engine and the change journal.

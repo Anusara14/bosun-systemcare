@@ -223,7 +223,9 @@ impl VitalsSampler {
             rx: a.iter().map(|x| x.rx).sum(),
             tx: a.iter().map(|x| x.tx).sum(),
             at: Instant::now(),
-            disk: DiskSampler::new(),
+            // opened on the first full tick: PDH costs ~4 MB while open, and
+            // disk activity is only shown in the monitor
+            disk: None,
             latest: Vitals {
                 mem: read_memory(),
                 ..Default::default()
@@ -242,6 +244,9 @@ impl VitalsSampler {
             ..self.latest
         };
         if full {
+            if self.disk.is_none() {
+                self.disk = DiskSampler::new();
+            }
             if let Some(d) = self.disk.as_mut() {
                 v.disk_pct = d.sample();
             }
@@ -251,6 +256,10 @@ impl VitalsSampler {
             v.tx_bps = per_second(self.tx, tx, secs);
             self.rx = rx;
             self.tx = tx;
+        }
+        if !full {
+            // monitor closed: give PDH's memory back
+            self.disk = None;
         }
         self.cpu = cpu;
         self.at = now;

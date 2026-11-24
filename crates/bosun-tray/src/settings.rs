@@ -25,6 +25,19 @@ impl Default for Settings {
     }
 }
 
+/// The main window's skin choice (`app.ini`, written by bosun.exe): the
+/// widget, monitor and menus follow it.
+pub fn light_skin() -> bool {
+    std::env::var_os("APPDATA")
+        .map(|a| PathBuf::from(a).join("Bosun").join("app.ini"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|t| {
+            t.lines()
+                .filter_map(|l| l.split_once('='))
+                .any(|(k, v)| k.trim() == "light_skin" && v.trim() == "1")
+        })
+}
+
 fn path() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Bosun").join("tray.ini"))
 }

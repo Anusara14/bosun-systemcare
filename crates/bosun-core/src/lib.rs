@@ -14,6 +14,7 @@ pub mod privacy;
 pub mod procs;
 pub mod registry;
 pub mod rescue;
+pub mod restore_point;
 pub mod security;
 pub mod services;
 pub mod shortcuts;

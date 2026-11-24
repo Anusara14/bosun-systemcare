@@ -295,6 +295,8 @@ You can bring it back any time from the Bosun icon in the system tray.");
         }
         Cmd::Menu => tray::show_menu(),
         Cmd::Reload => {
+            bosun_ui::gfx::set_light(settings::light_skin());
+            monitor::invalidate();
             // keep the widget where the user dragged it; take everything else
             let fresh = Settings::load();
             let shown = with_state(|s| {
@@ -399,6 +401,7 @@ fn run() -> Result<()> {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         shell::enable_dark_menus();
         bosun_ui::init()?;
+        bosun_ui::gfx::set_light(settings::light_skin());
         let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
         HINST.with(|h| h.set(hinst));
 

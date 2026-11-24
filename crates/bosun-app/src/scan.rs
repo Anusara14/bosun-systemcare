@@ -457,6 +457,18 @@ fn run_fix(
         });
         return;
     };
+    // Optional System Restore point first (Settings → General). Declining the
+    // administrator prompt doesn't stop the fix: the journal still has it all.
+    if !dry_run && crate::tray_ini::get_from(crate::tray_ini::APP, "restore_point", false) {
+        update(shared, |p| {
+            p.path = "Creating a System Restore point…".into()
+        });
+        if bosun_core::restore_point::create("Bosun SystemCare - before Fix").is_err() {
+            update(shared, |p| {
+                p.path = "No restore point was made; every change is still journaled.".into()
+            });
+        }
+    }
     for i in picked {
         if stop.load(Ordering::Relaxed) {
             break;

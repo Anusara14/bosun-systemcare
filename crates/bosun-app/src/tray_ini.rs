@@ -55,7 +55,7 @@ pub fn set(key: &str, on: bool) -> std::io::Result<()> {
 
 /// Asks a running tray to re-read `tray.ini` (its `Cmd::Reload`, posted as
 /// `WM_APP + 3`). No tray running: nothing to do, it reads the file at start.
-fn notify_tray() {
+pub fn notify_tray() {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_APP};
     // SAFETY: finds the tray's host window by class and posts it a message.

@@ -1170,6 +1170,8 @@ fn click(hwnd: HWND, h: Hit) {
                     let light = l == 1;
                     bosun_ui::gfx::set_light(light);
                     let _ = crate::tray_ini::set_to(crate::tray_ini::APP, "light_skin", light);
+                    // the widget and monitor follow the skin too
+                    crate::tray_ini::notify_tray();
                     // every cached layer was drawn in the other skin
                     a.layers = None;
                 }

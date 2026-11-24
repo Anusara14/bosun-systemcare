@@ -481,7 +481,12 @@ mod tests {
             )
         };
         bosun_ui::init().unwrap();
-        for (sub, hover) in [(1u8, (1u8, 1usize)), (2, (2, 1))] {
+        for (sub, hover, light) in [
+            (1u8, (1u8, 1usize), false),
+            (2, (2, 1), false),
+            (2, (2, 1), true),
+        ] {
+            crate::gfx::set_light(light);
             let m = Menu {
                 hwnd: HWND::default(),
                 surf: None,
@@ -490,7 +495,10 @@ mod tests {
                 checks: [true, true, false],
                 hibernate: false,
             };
-            let path = std::path::Path::new(&out).join(format!("wmenu{sub}.png"));
+            let path = std::path::Path::new(&out).join(format!(
+                "wmenu{sub}{}.png",
+                if light { "-light" } else { "" }
+            ));
             bosun_ui::snapshot::save_png(
                 crate::graphics(),
                 W as u32,

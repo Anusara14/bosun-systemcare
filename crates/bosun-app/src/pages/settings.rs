@@ -70,6 +70,8 @@ pub struct Values {
     pub tray_start: bool,
     pub widget: bool,
     pub auto_ram: bool,
+    /// A System Restore point before each Fix.
+    pub restore_point: bool,
     /// Care scan modules (bit i = `MODULES[i]`).
     pub picks: u16,
 }
@@ -79,6 +81,7 @@ impl Values {
         tray_start: true,
         widget: true,
         auto_ram: false,
+        restore_point: false,
         picks: DEFAULT_PICKS,
     };
 
@@ -88,6 +91,7 @@ impl Values {
             tray_start: m.tray_start,
             widget: m.widget,
             auto_ram: m.auto_ram,
+            restore_point: crate::tray_ini::get_from(crate::tray_ini::APP, "restore_point", false),
             picks: saved_picks(),
         }
     }
@@ -127,6 +131,7 @@ impl SettingsView {
             0 => d.tray_start = !d.tray_start,
             1 => d.widget = !d.widget,
             2 => d.auto_ram = !d.auto_ram,
+            3 => d.restore_point = !d.restore_point,
             k => d.picks ^= 1 << (k - 10),
         }
     }
@@ -152,6 +157,10 @@ impl SettingsView {
         if d.auto_ram != s.auto_ram {
             crate::pages::menu::flip(&info, 2)?;
         }
+        if d.restore_point != s.restore_point {
+            crate::tray_ini::set_to(crate::tray_ini::APP, "restore_point", d.restore_point)
+                .map_err(|_| "Couldn't save the restore point setting.")?;
+        }
         for i in 0..MODULES.len() {
             let on = d.picks & 1 << i != 0;
             if on != (s.picks & 1 << i != 0) {
@@ -174,7 +183,7 @@ fn tree_row(k: usize) -> D2D_RECT_F {
 /// (checkbox id, cap centre y) on the current page.
 fn checks(sel: u8) -> Vec<(u8, f32)> {
     match sel {
-        0 => vec![(0, 95.3), (1, 123.3)],
+        0 => vec![(0, 95.3), (1, 123.3), (3, 195.3)],
         1 => (0..MODULES.len())
             .map(|i| (10 + i as u8, 117.0 + 21.0 * i as f32))
             .collect(),
@@ -277,6 +286,7 @@ fn check_line(p: &Painter, v: &View, s: &SettingsView, k: u8, cy: f32, label: &s
         0 => s.draft.tray_start,
         1 => s.draft.widget,
         2 => s.draft.auto_ram,
+        3 => s.draft.restore_point,
         k => s.draft.picks & 1 << (k - 10) != 0,
     };
     let hot = v.hover == Hit::SetCheck(k);
@@ -360,10 +370,27 @@ fn page(p: &Painter, v: &View, s: &SettingsView) {
                 p,
                 &[
                     "Shows RAM and CPU use at a glance. Click it for the Performance Monitor, or",
-                    "right-click it for Turbo Boost and the main window.",
+                    "right-click it for Clean RAM, power options and its own settings.",
                 ],
                 PAGE_X + 15.0,
                 146.0,
+            );
+            check_line(
+                p,
+                v,
+                s,
+                3,
+                195.3,
+                "Create a System Restore point before each Fix",
+            );
+            para(
+                p,
+                &[
+                    "Windows asks for administrator rights each time. Bosun's journal keeps",
+                    "every change restorable from the Rescue Center either way.",
+                ],
+                PAGE_X + 15.0,
+                218.0,
             );
         }
         1 => {
@@ -544,6 +571,9 @@ mod tests {
         assert_eq!(s.draft.picks, DEFAULT_PICKS & !(1 << 2));
         s.check(0);
         assert!(!s.draft.tray_start);
+        assert_eq!(hit(&v, &s, 300.0, 195.3), Hit::SetCheck(3));
+        s.check(3);
+        assert!(s.draft.restore_point);
         assert_ne!(s.draft, s.saved);
     }
 }

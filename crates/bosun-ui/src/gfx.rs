@@ -47,6 +47,63 @@ pub mod glyph {
     pub const BACK: char = '\u{E72B}';
 }
 
+/// Light skin: the painter maps every grey to its light-skin counterpart
+/// (dark surfaces become light, light text becomes dark) and keeps colours.
+/// One switch instead of a second palette in every page.
+static LIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+thread_local! {
+    /// Depth of `Painter::untinted` calls: drawing that keeps its own colours.
+    static RAW: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+pub fn set_light(on: bool) {
+    LIGHT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn is_light() -> bool {
+    LIGHT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The light-skin version of a dark-skin colour (greys only; hues stay).
+pub fn light_of(c: D2D1_COLOR_F) -> D2D1_COLOR_F {
+    let (mx, mn) = (c.r.max(c.g).max(c.b), c.r.min(c.g).min(c.b));
+    if mx - mn > 0.09 {
+        return c;
+    }
+    let v = (c.r + c.g + c.b) / 3.0;
+    // a black wash (dimming behind a dialog) stays a black wash, lighter
+    if v < 0.05 && c.a < 1.0 {
+        return D2D1_COLOR_F { a: c.a * 0.45, ..c };
+    }
+    // Light skins raise surfaces by making them whiter, so the dark ramp maps:
+    // page (0x15) → soft grey 0.94, cards (0x1C…0x23) → white; then lifted
+    // controls, selections and strokes (0x24…0x5F) step back down to greys;
+    // text (0x60…0xFF) → near black, lighter as it dims.
+    let w = if v <= 0.137 {
+        0.94 + ((v - 0.063).max(0.0) / 0.074) * 0.06
+    } else if v < 0.376 {
+        1.0 - (v - 0.137) * 1.6
+    } else {
+        0.10 + (1.0 - v) * 0.6
+    };
+    D2D1_COLOR_F {
+        r: w,
+        g: w,
+        b: w,
+        a: c.a,
+    }
+}
+
+/// `c` in the current skin (for drawing that bypasses the painter).
+pub fn tint(c: D2D1_COLOR_F) -> D2D1_COLOR_F {
+    if is_light() && RAW.with(|r| r.get()) == 0 {
+        light_of(c)
+    } else {
+        c
+    }
+}
+
 pub fn col(hex: u32) -> D2D1_COLOR_F {
     cola(hex, 1.0)
 }
@@ -109,6 +166,8 @@ pub struct Fonts {
     pub h1: IDWriteTextFormat,
     pub m13sb: IDWriteTextFormat,
     pub m14sb: IDWriteTextFormat,
+    /// About dialog: product name.
+    pub m18: IDWriteTextFormat,
     /// Scan screen (reference cap heights: heading 15, title 15, % digits 50).
     pub s_head: IDWriteTextFormat,
     pub s_title: IDWriteTextFormat,
@@ -184,6 +243,7 @@ impl Gfx {
                 )?,
                 m13sb: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 13.0)?,
                 m14sb: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.0)?,
+                m18: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_NORMAL, 18.0)?,
                 h1: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 20.0)?,
                 s_head: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_SEMI_BOLD, 22.0)?,
                 s_title: text_format(&dw, "Segoe UI", DWRITE_FONT_WEIGHT_NORMAL, 21.0)?,
@@ -309,11 +369,41 @@ pub struct Painter<'a> {
 // between BeginDraw/EndDraw, with resources created from the same target/factory.
 impl Painter<'_> {
     fn set(&self, c: D2D1_COLOR_F) {
-        unsafe { self.br.SetColor(&c) };
+        unsafe { self.br.SetColor(&tint(c)) };
     }
 
     pub fn clear(&self, c: D2D1_COLOR_F) {
-        unsafe { self.rt.Clear(Some(&c)) };
+        unsafe { self.rt.Clear(Some(&tint(c))) };
+    }
+
+    /// Draws `f` scaled by `s` about the origin, then moved to (`x`, `y`):
+    /// a miniature of anything drawn at full size.
+    pub fn scaled(&self, x: f32, y: f32, s: f32, f: impl FnOnce()) {
+        let m = Matrix3x2 {
+            M11: s,
+            M12: 0.0,
+            M21: 0.0,
+            M22: s,
+            M31: x,
+            M32: y,
+        };
+        let mut outer = Matrix3x2::identity();
+        // SAFETY: transform state on the current render target, restored after.
+        unsafe {
+            self.rt.GetTransform(&mut outer);
+            self.rt.SetTransform(&(m * outer));
+        }
+        f();
+        // SAFETY: as above.
+        unsafe { self.rt.SetTransform(&outer) };
+    }
+
+    /// Draws with `f` in the exact colours given, whatever the skin (the
+    /// logo, skin previews, switch knobs).
+    pub fn untinted(&self, f: impl FnOnce()) {
+        RAW.with(|r| r.set(r.get() + 1));
+        f();
+        RAW.with(|r| r.set(r.get() - 1));
     }
 
     pub fn fill(&self, r: D2D_RECT_F, c: D2D1_COLOR_F) {
@@ -436,6 +526,10 @@ impl Painter<'_> {
     /// vectors so the always-on widget needs no image codecs. Geometry matches
     /// `brand/bosun-tray.svg` (260-unit design box).
     pub fn logo(&self, x: f32, y: f32, size: f32) {
+        self.untinted(|| self.logo_raw(x, y, size));
+    }
+
+    fn logo_raw(&self, x: f32, y: f32, size: f32) {
         let s = size / 260.0;
         let (cx, cy) = (x + 130.0 * s, y + 130.0 * s);
         // Disc: lifted slightly at the top, like light falling on glass.
@@ -498,7 +592,9 @@ impl Painter<'_> {
             sink.AddArc(&arc(v(150.0, 178.0), 25.0));
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);
             let _ = sink.Close();
-            self.rt.SetTransform(&m);
+            let mut outer = Matrix3x2::identity();
+            self.rt.GetTransform(&mut outer);
+            self.rt.SetTransform(&(m * outer));
             // White B with a faint cool tint at its foot (brush in glyph space).
             let fill = [
                 (0.0, col(0xFFFFFF)),
@@ -511,7 +607,7 @@ impl Painter<'_> {
                     .rt
                     .DrawGeometry(&geo, self.br, 24.0, &self.g.round_join),
             }
-            self.rt.SetTransform(&Matrix3x2::identity());
+            self.rt.SetTransform(&outer);
         }
     }
 
@@ -659,7 +755,10 @@ impl Painter<'_> {
     ) -> Option<windows::Win32::Graphics::Direct2D::ID2D1LinearGradientBrush> {
         let gs: Vec<D2D1_GRADIENT_STOP> = stops
             .iter()
-            .map(|&(position, color)| D2D1_GRADIENT_STOP { position, color })
+            .map(|&(position, color)| D2D1_GRADIENT_STOP {
+                position,
+                color: tint(color),
+            })
             .collect();
         // SAFETY: temporary brush resources on the current render target.
         unsafe {
@@ -888,7 +987,10 @@ impl Painter<'_> {
         let (gx, gy, gr) = grad;
         let gs: Vec<D2D1_GRADIENT_STOP> = stops
             .iter()
-            .map(|&(position, color)| D2D1_GRADIENT_STOP { position, color })
+            .map(|&(position, color)| D2D1_GRADIENT_STOP {
+                position,
+                color: tint(color),
+            })
             .collect();
         // SAFETY: temporary brush resources on the current render target.
         unsafe {
@@ -1005,4 +1107,21 @@ pub fn px(d: f32, dpi: u32) -> i32 {
 
 pub fn rect_size(r: &RECT) -> (i32, i32) {
     (r.right - r.left, r.bottom - r.top)
+}
+
+#[cfg(test)]
+mod light_tests {
+    use super::*;
+
+    #[test]
+    fn greys_flip_and_hues_stay() {
+        let (page, card) = (light_of(col(0x151515)), light_of(col(0x1E1E1E)));
+        let text = light_of(col(0xE6E6E6));
+        assert!(page.r > 0.93 && card.r > page.r && text.r < 0.2);
+        assert!(light_of(col(0x2E2E2E)).r < 0.95, "selections stay visible");
+        assert_eq!(light_of(cola(0x000000, 0.6)).r, 0.0, "dims stay dark");
+        let blue = col(0x61ADF8);
+        assert_eq!(light_of(blue).b, blue.b);
+        assert_eq!(light_of(cola(0x000000, 0.5)).a, 0.225);
+    }
 }

@@ -15,7 +15,7 @@ pub fn nav(p: &Painter, page: Page, cx: f32, cy: f32, fg: D2D1_COLOR_F, cut: D2D
         Page::SpeedUp => speed(p, cx, cy, fg, cut),
         Page::Protect => shield(p, cx, cy, fg, cut),
         Page::Updater => cloud(p, cx, cy, fg, cut),
-        Page::About => info(p, cx, cy, fg, cut),
+        Page::Rescue => lifebuoy(p, cx, cy, fg, cut),
     }
 }
 
@@ -96,9 +96,19 @@ fn cloud(p: &Painter, cx: f32, cy: f32, fg: D2D1_COLOR_F, cut: D2D1_COLOR_F) {
     p.line(cx + 0.3, cy + 0.0, cx + 4.0, cy + 3.7, 2.2, fg);
 }
 
-/// Solid circle with a knocked-out "i".
-fn info(p: &Painter, cx: f32, cy: f32, fg: D2D1_COLOR_F, cut: D2D1_COLOR_F) {
-    p.circle(cx, cy, 12.0, fg);
-    p.circle(cx, cy - 5.6, 1.8, cut);
-    p.line(cx, cy - 1.6, cx, cy + 6.4, 2.6, cut);
+/// Lifebuoy: a thick ring with four diagonal bands knocked out.
+fn lifebuoy(p: &Painter, cx: f32, cy: f32, fg: D2D1_COLOR_F, cut: D2D1_COLOR_F) {
+    p.ring(cx, cy, 8.6, 6.8, fg);
+    for k in 0..4 {
+        let t = std::f32::consts::FRAC_PI_4 + k as f32 * std::f32::consts::FRAC_PI_2;
+        let (s, c) = t.sin_cos();
+        p.line(
+            cx + 5.0 * c,
+            cy + 5.0 * s,
+            cx + 12.2 * c,
+            cy + 12.2 * s,
+            2.0,
+            cut,
+        );
+    }
 }

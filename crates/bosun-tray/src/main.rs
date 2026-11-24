@@ -10,6 +10,7 @@ mod shell;
 mod tools;
 mod tray;
 mod widget;
+mod wmenu;
 
 use std::cell::{Cell, RefCell};
 use std::time::Instant;
@@ -392,6 +393,7 @@ fn run() -> Result<()> {
 
         widget::register_class();
         popup::register_class();
+        wmenu::register_class();
         monitor::register_class();
         tray::add();
         if widget_visible {

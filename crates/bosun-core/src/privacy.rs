@@ -124,13 +124,16 @@ mod tests {
 
     #[test]
     fn set_dword_round_trips_in_a_test_key() {
-        set_dword(HKEY_CURRENT_USER, r"Software\BosunTest\Privacy", "X", 7).unwrap();
-        let k = open_in(HKEY_CURRENT_USER, r"Software\BosunTest\Privacy", false).unwrap();
+        set_dword(HKEY_CURRENT_USER, r"Software\BosunTestPrivacy", "X", 7).unwrap();
+        let k = open_in(HKEY_CURRENT_USER, r"Software\BosunTestPrivacy", false).unwrap();
         assert_eq!(dword(&k, None, "X"), Some(7));
         drop(k);
         use windows::Win32::System::Registry::RegDeleteTreeW;
         unsafe {
-            let _ = RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(r"Software\BosunTest"));
+            let _ = RegDeleteTreeW(
+                HKEY_CURRENT_USER,
+                &HSTRING::from(r"Software\BosunTestPrivacy"),
+            );
         }
     }
 }

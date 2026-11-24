@@ -1,10 +1,14 @@
 //! Pages shown in the content area to the right of the sidebar.
 
+pub mod actions;
 pub mod care;
+pub mod menu;
 pub mod optimizer;
-mod placeholder;
+
 pub mod protect;
+pub mod rescue;
 pub mod scan;
+pub mod settings;
 pub mod speedup;
 pub mod tools;
 pub mod turbo;
@@ -20,7 +24,7 @@ pub enum Page {
     SpeedUp,
     Protect,
     Updater,
-    About,
+    Rescue,
 }
 
 pub const ALL: [Page; 5] = [
@@ -28,7 +32,7 @@ pub const ALL: [Page; 5] = [
     Page::SpeedUp,
     Page::Protect,
     Page::Updater,
-    Page::About,
+    Page::Rescue,
 ];
 
 impl Page {
@@ -38,7 +42,7 @@ impl Page {
             Page::SpeedUp => "Speed Up",
             Page::Protect => "Protect",
             Page::Updater => "Software Updater",
-            Page::About => "About",
+            Page::Rescue => "Rescue Center",
         }
     }
 
@@ -48,13 +52,29 @@ impl Page {
             "speedup" | "speed-up" => Page::SpeedUp,
             "protect" => Page::Protect,
             "updater" | "software-updater" => Page::Updater,
-            "about" => Page::About,
+            "rescue" | "rescue-center" => Page::Rescue,
             _ => return None,
         })
     }
 }
 
 pub fn draw(p: &Painter, v: &View) {
+    content(p, v);
+    if let Some(m) = &v.menu {
+        menu::draw_menu(p, v, m);
+    }
+    if v.about {
+        menu::draw_about(p, v);
+    }
+}
+
+fn content(p: &Painter, v: &View) {
+    if let Some(s) = &v.settings {
+        return settings::draw(p, v, s);
+    }
+    if let Some(b) = &v.bell {
+        return actions::draw(p, v, b);
+    }
     if v.tools {
         return tools::draw(p, v);
     }
@@ -72,7 +92,7 @@ pub fn draw(p: &Painter, v: &View) {
         Page::SpeedUp => speedup::draw(p, v),
         Page::Protect => protect::draw(p, v),
         Page::Updater => updater::draw(p, v),
-        other => placeholder::draw(p, v, other),
+        Page::Rescue => rescue::draw(p, v),
     }
 }
 
@@ -88,7 +108,7 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
         Page::SpeedUp => speedup::hit(v, x, y),
         Page::Protect => protect::hit(v, x, y),
         Page::Updater => updater::hit(v, x, y),
-        _ => Hit::None,
+        Page::Rescue => rescue::hit(v, x, y),
     }
 }
 

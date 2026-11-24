@@ -143,6 +143,33 @@ pub enum Hit {
     UpdOne(usize),
     UpdIgnore(usize),
     UpdRow(usize),
+    /// Rescue Center rows (indices into the journal list, newest first).
+    RescueRestore(usize),
+    RescueBin(usize),
+    RescueRow(usize),
+    RescueFolder,
+    /// The ☰ panel: outside it (closes), an item, a settings switch.
+    MenuOutside,
+    MenuItem(u8),
+    MenuToggle(u8),
+    /// A skin preview: 0 Dark, 1 Light.
+    MenuSkin(u8),
+    /// About dialog.
+    AboutClose,
+    AboutLink(u8),
+    /// Settings: a tree row, a checkbox, the Logs & Backup buttons, the footer.
+    SetNav(u8),
+    SetCheck(u8),
+    SetOpenLogs,
+    SetPrune,
+    SetQuick,
+    SetRecommended,
+    SetCancel,
+    SetOk,
+    /// The bell's panel: a switch, "turn everything on", close.
+    BellToggle(u8),
+    BellAll,
+    BellClose,
 }
 
 impl Hit {
@@ -180,6 +207,15 @@ pub struct View {
     pub protect: crate::pages::protect::ProtectInfo,
     /// The Software Updater's list, on that page.
     pub updater: Option<crate::pages::updater::UpdView>,
+    /// The Rescue Center's journal, on that page.
+    pub rescue: Option<crate::pages::rescue::RescueView>,
+    /// The ☰ panel, when open, and the About dialog.
+    pub menu: Option<crate::pages::menu::MenuInfo>,
+    pub about: bool,
+    /// The Settings dialog, when open (it covers the whole window).
+    pub settings: Option<crate::pages::settings::SettingsView>,
+    /// The bell's panel, when open (it covers the whole window).
+    pub bell: Option<crate::pages::actions::Actions>,
     pub note: Option<&'static str>,
     pub maximized: bool,
 }
@@ -208,6 +244,11 @@ struct App {
     tools: bool,
     protect: crate::pages::protect::ProtectInfo,
     updater: crate::pages::updater::Updater,
+    rescue: crate::pages::rescue::RescueView,
+    menu: Option<crate::pages::menu::MenuInfo>,
+    about: bool,
+    settings: Option<crate::pages::settings::SettingsView>,
+    bell: Option<crate::pages::actions::Actions>,
     /// Running layout change between modes: (start, from, to).
     mode_anim: Option<(Instant, f32, f32)>,
     /// Running hover transition: (start, from, to).
@@ -252,6 +293,11 @@ impl App {
             tools: self.tools,
             protect: self.protect.clone(),
             updater: (self.page == Page::Updater).then(|| self.updater.view()),
+            rescue: (self.page == Page::Rescue).then(|| self.rescue.clone()),
+            menu: self.menu,
+            about: self.about,
+            settings: self.settings.clone(),
+            bell: self.bell,
             note: self
                 .note
                 .filter(|(_, at)| at.elapsed().as_secs() < 5)
@@ -264,6 +310,18 @@ impl App {
 
 /// Chrome first (title buttons, sidebar), then the active page.
 pub fn hit(v: &View, x: f32, y: f32) -> Hit {
+    if v.about {
+        return pages::menu::about_hit(v, x, y);
+    }
+    if v.menu.is_some() {
+        return pages::menu::menu_hit(v, x, y);
+    }
+    if let Some(s) = &v.settings {
+        return pages::settings::hit(v, s, x, y);
+    }
+    if v.bell.is_some() {
+        return pages::actions::hit(v, x, y);
+    }
     if v.tools {
         let h = pages::tools::hit(v, x, y);
         if h != Hit::None {
@@ -289,6 +347,11 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
 }
 
 pub fn create(page: Page) -> Result<()> {
+    // the saved skin; capture hook: BOSUN_LIGHT=1 forces the light skin
+    bosun_ui::gfx::set_light(
+        std::env::var_os("BOSUN_LIGHT").is_some()
+            || crate::tray_ini::get_from(crate::tray_ini::APP, "light_skin", false),
+    );
     // SAFETY: class registration and window creation for our own process.
     unsafe {
         let hinst = GetModuleHandleW(None)?;
@@ -327,12 +390,20 @@ pub fn create(page: Page) -> Result<()> {
                 hover: Hit::None,
                 pressed: Hit::None,
                 mode: Mode::Recommended,
-                scan_hover: 0.0,
-                scan_label: (1.0, 0.0),
+                // capture hook: BOSUN_SCAN_HOVER=<0..1> freezes the SCAN hover there
+                scan_hover: std::env::var("BOSUN_SCAN_HOVER")
+                    .ok()
+                    .and_then(|h| h.parse().ok())
+                    .unwrap_or(0.0),
+                scan_label: std::env::var("BOSUN_SCAN_HOVER")
+                    .ok()
+                    .and_then(|h| h.parse().ok())
+                    .map_or((1.0, 0.0), |h| crate::pages::care::label_fades(h, true)),
                 scan: None,
-                auto_fix: script_fix(),
+                auto_fix: script_fix()
+                    || crate::tray_ini::get_from(crate::tray_ini::APP, "auto_fix", false),
                 auto_ran: false,
-                picks: crate::scan::ALL,
+                picks: crate::pages::settings::saved_picks(),
                 manual_t: 0.0,
                 speed: speed_info(),
                 // capture hook: BOSUN_OPT_TAB=<n> opens the Startup Optimizer
@@ -366,6 +437,26 @@ pub fn create(page: Page) -> Result<()> {
                     Default::default()
                 },
                 updater: Default::default(),
+                // capture hooks: BOSUN_MENU=1 opens the ☰ panel, BOSUN_ABOUT=1 the About dialog
+                menu: std::env::var_os("BOSUN_MENU").map(|_| crate::pages::menu::MenuInfo::load()),
+                about: std::env::var_os("BOSUN_ABOUT").is_some(),
+                // capture hook: BOSUN_BELL=1 opens the bell's panel
+                bell: std::env::var_os("BOSUN_BELL")
+                    .map(|_| crate::pages::actions::Actions::load(false)),
+                // capture hook: BOSUN_SETTINGS=<tree row> opens Settings on that page
+                settings: std::env::var("BOSUN_SETTINGS")
+                    .ok()
+                    .and_then(|k| k.parse().ok())
+                    .map(|k| {
+                        let mut s = crate::pages::settings::SettingsView::open();
+                        s.sel = k;
+                        s
+                    }),
+                rescue: if page == Page::Rescue {
+                    crate::pages::rescue::RescueView::load()
+                } else {
+                    Default::default()
+                },
                 turbo: std::env::var("BOSUN_TURBO_TAB")
                     .ok()
                     .and_then(|t| t.parse().ok())
@@ -406,7 +497,7 @@ pub fn create(page: Page) -> Result<()> {
                 let mut v = a.view();
                 v.w = DEFAULT_W;
                 v.h = DEFAULT_H;
-                let bg = col(backdrop::BASE);
+                let bg = bosun_ui::gfx::tint(col(backdrop::BASE));
                 let _ = bosun_ui::snapshot::save_png(
                     graphics(),
                     960,
@@ -516,6 +607,11 @@ struct Key {
     tools: bool,
     protect: crate::pages::protect::ProtectInfo,
     updater: Option<crate::pages::updater::UpdView>,
+    rescue: Option<crate::pages::rescue::RescueView>,
+    menu: Option<crate::pages::menu::MenuInfo>,
+    about: bool,
+    settings: Option<crate::pages::settings::SettingsView>,
+    bell: Option<crate::pages::actions::Actions>,
     note: Option<&'static str>,
     maximized: bool,
 }
@@ -541,6 +637,11 @@ impl Key {
             tools: v.tools,
             protect: v.protect.clone(),
             updater: v.updater.clone(),
+            rescue: v.rescue.clone(),
+            menu: v.menu,
+            about: v.about,
+            settings: v.settings.clone(),
+            bell: v.bell,
             note: v.note,
             maximized: v.maximized,
         }
@@ -630,7 +731,7 @@ fn paint(a: &mut App) {
     // SAFETY: Begin/EndDraw pair on our render target; bitmaps come from it.
     unsafe {
         rt.BeginDraw();
-        rt.Clear(Some(&col(backdrop::BASE)));
+        rt.Clear(Some(&bosun_ui::gfx::tint(col(backdrop::BASE))));
         if let Some((_, _, o)) = &l.overlay {
             rt.DrawBitmap(
                 o,
@@ -832,22 +933,7 @@ fn click(hwnd: HWND, h: Hit) {
             }
             invalidate(hwnd);
         }
-        Hit::OptRescue => {
-            if let Some(dir) = bosun_core::clean::journal_dir() {
-                let _ = std::fs::create_dir_all(&dir);
-                // SAFETY: opens our journal folder in Explorer.
-                unsafe {
-                    windows::Win32::UI::Shell::ShellExecuteW(
-                        None,
-                        w!("open"),
-                        &windows::core::HSTRING::from(dir.as_os_str()),
-                        None,
-                        None,
-                        SW_SHOWNORMAL,
-                    );
-                }
-            }
-        }
+        Hit::OptRescue => open_rescue(hwnd),
         // SAFETY: closing our own window ends the process.
         Hit::Close => unsafe {
             let _ = DestroyWindow(hwnd);
@@ -857,12 +943,26 @@ fn click(hwnd: HWND, h: Hit) {
             let _ = ShowWindow(hwnd, SW_MINIMIZE);
         },
         Hit::Max => frame::toggle_maximize(hwnd),
-        Hit::Menu => chrome::show_menu(hwnd),
+        Hit::Menu => {
+            with_app(|a| a.menu = Some(crate::pages::menu::MenuInfo::load()));
+            invalidate(hwnd);
+        }
+        Hit::MenuItem(k) => menu_item(hwnd, k),
+        Hit::MenuOutside | Hit::AboutClose => {
+            with_app(|a| {
+                a.menu = None;
+                a.about = false;
+            });
+            invalidate(hwnd);
+        }
         _ => {
             with_app(|a| match h {
                 Hit::Nav(p) => {
                     if p == Page::SpeedUp {
                         a.speed = speed_info();
+                    }
+                    if p == Page::Rescue {
+                        a.rescue = crate::pages::rescue::RescueView::load();
                     }
                     if p == Page::Protect {
                         a.protect = crate::pages::protect::ProtectInfo::load();
@@ -944,6 +1044,115 @@ fn click(hwnd: HWND, h: Hit) {
                     unsafe { SetTimer(Some(hwnd), UPDATE_TIMER, 250, None) };
                 }
                 Hit::UpdIgnore(i) => a.updater.ignore(i),
+                Hit::SetNav(k) => a.settings.iter_mut().for_each(|s| s.sel = k),
+                Hit::SetCheck(k) => a.settings.iter_mut().for_each(|s| s.check(k)),
+                Hit::SetRecommended => a.settings.iter_mut().for_each(|s| {
+                    s.draft = crate::pages::settings::Values::RECOMMENDED;
+                }),
+                Hit::SetCancel => a.settings = None,
+                Hit::SetQuick => {
+                    a.settings = None;
+                    a.menu = Some(crate::pages::menu::MenuInfo::load());
+                }
+                Hit::SetOk => {
+                    if let Some(s) = a.settings.take() {
+                        match s.apply() {
+                            Ok(()) => {
+                                a.picks = s.draft.picks;
+                                a.speed = speed_info();
+                            }
+                            Err(e) => {
+                                // keep the dialog and the draft so nothing is lost
+                                a.note = Some((e, Instant::now()));
+                                a.settings = Some(s);
+                            }
+                        }
+                    }
+                }
+                Hit::SetOpenLogs => {
+                    if let Some(d) = bosun_core::clean::journal_dir() {
+                        let _ = std::fs::create_dir_all(&d);
+                        shell(&d.to_string_lossy(), "");
+                    }
+                }
+                Hit::SetPrune => {
+                    let r =
+                        bosun_core::clean::journal_dir().map(|d| bosun_core::rescue::prune(&d, 30));
+                    a.note = Some((
+                        match r {
+                            Some(Ok(0)) => "No logs are older than 30 days.",
+                            Some(Ok(_)) => "Deleted the logs older than 30 days.",
+                            _ => "Couldn't delete the old logs.",
+                        },
+                        Instant::now(),
+                    ));
+                    a.settings
+                        .iter_mut()
+                        .for_each(|s| s.logs = crate::pages::settings::logs());
+                }
+                Hit::MenuToggle(k) => {
+                    if let Some(m) = a.menu {
+                        if let Err(e) = crate::pages::menu::flip(&m, k) {
+                            a.note = Some((e, Instant::now()));
+                        }
+                        a.menu = Some(crate::pages::menu::MenuInfo::load());
+                        a.speed = speed_info();
+                    }
+                }
+                Hit::MenuSkin(l) => {
+                    let light = l == 1;
+                    bosun_ui::gfx::set_light(light);
+                    let _ = crate::tray_ini::set_to(crate::tray_ini::APP, "light_skin", light);
+                    // every cached layer was drawn in the other skin
+                    a.layers = None;
+                }
+                Hit::AboutLink(k) => {
+                    a.about = false;
+                    match k {
+                        0 => a.page = Page::Rescue,
+                        1 => {
+                            if let Some(d) = bosun_core::clean::journal_dir() {
+                                let _ = std::fs::create_dir_all(&d);
+                                shell(&d.to_string_lossy(), "");
+                            }
+                        }
+                        _ => {
+                            shell("ms-settings:appsfeatures", "");
+                        }
+                    }
+                    if k == 0 {
+                        a.rescue = crate::pages::rescue::RescueView::load();
+                    }
+                }
+                Hit::RescueRestore(k) => {
+                    let r = a.rescue.entries.get(k).cloned().map(|e| {
+                        bosun_core::clean::journal_dir()
+                            .ok_or_else(|| std::io::Error::other("no journal folder"))
+                            .and_then(|d| bosun_core::rescue::restore(&e, &d))
+                    });
+                    a.note = Some((
+                        match r {
+                            Some(Ok(())) => "Restored.",
+                            Some(Err(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                                "Restoring this needs administrator rights."
+                            }
+                            _ => "Couldn't restore that change.",
+                        },
+                        Instant::now(),
+                    ));
+                    let scroll = a.rescue.scroll;
+                    a.rescue = crate::pages::rescue::RescueView::load();
+                    a.rescue.scroll = scroll;
+                }
+                Hit::RescueBin(_) => {
+                    shell("shell:RecycleBinFolder", "");
+                }
+                Hit::RescueFolder => {
+                    if let Some(d) = bosun_core::clean::journal_dir() {
+                        let _ = std::fs::create_dir_all(&d);
+                        shell(&d.to_string_lossy(), "");
+                    }
+                }
                 Hit::Card(2) => {
                     a.opt = Some(crate::pages::optimizer::Optimizer::open_drivers());
                     // SAFETY: poll timer on our own window, killed when the search ends.
@@ -1052,8 +1261,25 @@ fn click(hwnd: HWND, h: Hit) {
                         crate::scan::ALL
                     }
                 }
-                Hit::Bell => {
-                    a.note = Some(("You're all caught up: no notifications.", Instant::now()))
+                Hit::Bell => a.bell = Some(crate::pages::actions::Actions::load(a.auto_fix)),
+                Hit::BellClose => a.bell = None,
+                Hit::BellToggle(_) | Hit::BellAll => {
+                    if let Some(b) = a.bell {
+                        let ks: Vec<usize> = match h {
+                            Hit::BellToggle(k) => vec![k as usize],
+                            _ => (0..b.on.len()).filter(|&k| !b.on[k]).collect(),
+                        };
+                        for k in ks {
+                            let on = !b.on[k];
+                            match crate::pages::actions::set(k, on) {
+                                Ok(()) if k == 2 => a.auto_fix = on,
+                                Ok(()) => {}
+                                Err(e) => a.note = Some((e, Instant::now())),
+                            }
+                        }
+                        a.bell = Some(crate::pages::actions::Actions::load(a.auto_fix));
+                        a.speed = speed_info();
+                    }
                 }
                 Hit::Scan if a.mode == Mode::Manual && a.picks == 0 => {
                     a.note = Some(("Tick at least one module to scan.", Instant::now()));
@@ -1061,7 +1287,7 @@ fn click(hwnd: HWND, h: Hit) {
                 Hit::Scan => {
                     a.auto_ran = false;
                     let picks = match a.mode {
-                        Mode::Recommended => crate::scan::ALL,
+                        Mode::Recommended => crate::pages::settings::saved_picks(),
                         Mode::Manual => a.picks,
                     };
                     a.scan = Some(crate::scan::start(picks));
@@ -1072,7 +1298,10 @@ fn click(hwnd: HWND, h: Hit) {
                 Hit::ScanSkip => a.scan.iter().for_each(|s| s.skip()),
                 Hit::ScanStop => a.scan.iter().for_each(|s| s.stop()),
                 Hit::ScanBack => a.scan = None,
-                Hit::AutoFix => a.auto_fix = !a.auto_fix,
+                Hit::AutoFix => {
+                    a.auto_fix = !a.auto_fix;
+                    let _ = crate::tray_ini::set_to(crate::tray_ini::APP, "auto_fix", a.auto_fix);
+                }
                 Hit::ScanRow(i) => a.scan.iter().for_each(|s| s.toggle(i)),
                 Hit::ScanFix => {
                     if a.scan.as_ref().is_some_and(|s| s.fix(fix_dry_run())) {
@@ -1097,8 +1326,63 @@ fn click(hwnd: HWND, h: Hit) {
 
 /// Opens a page from outside (e.g. the menu's About entry).
 pub fn go(hwnd: HWND, page: Page) {
-    with_app(|a| a.page = page);
+    with_app(|a| {
+        if page == Page::Rescue {
+            a.rescue = crate::pages::rescue::RescueView::load();
+        }
+        a.page = page;
+    });
     invalidate(hwnd);
+}
+
+/// A ☰ panel item (see `pages::menu::ITEMS`); all but Quick Settings close it.
+fn menu_item(hwnd: HWND, k: u8) {
+    if k == 0 {
+        return;
+    }
+    with_app(|a| a.menu = None);
+    match k {
+        1 => {
+            with_app(|a| a.settings = Some(crate::pages::settings::SettingsView::open()));
+        }
+        2 => {
+            // the tray opens its monitor when started a second time
+            if let Some(t) = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("bosun-tray.exe")))
+            {
+                shell(&t.to_string_lossy(), "");
+            }
+        }
+        3 => open_rescue(hwnd),
+        4 => {
+            if let Some(d) = bosun_core::clean::journal_dir() {
+                let _ = std::fs::create_dir_all(&d);
+                shell(&d.to_string_lossy(), "");
+            }
+        }
+        5 => {
+            shell("ms-settings:windowsupdate", "");
+        }
+        6 => {
+            with_app(|a| a.about = true);
+        }
+        // SAFETY: closing our own window ends the process.
+        _ => unsafe {
+            let _ = DestroyWindow(hwnd);
+        },
+    }
+    invalidate(hwnd);
+}
+
+/// Closes any overlay (optimizer, Turbo, tools) and shows the Rescue Center.
+fn open_rescue(hwnd: HWND) {
+    with_app(|a| {
+        a.opt = None;
+        a.turbo = None;
+        a.tools = false;
+    });
+    go(hwnd, Page::Rescue);
 }
 
 /// Hover transition length, measured from the reference recording (300 ms).
@@ -1258,6 +1542,10 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 let dy = -delta / 120.0;
                 a.turbo.as_mut().map(|t| t.scroll_by(dy * 40.0)).is_some()
                     || a.opt.as_mut().map(|o| o.scroll_by(dy * 61.0, h)).is_some()
+                    || (a.page == Page::Rescue && {
+                        a.rescue.scroll_by(dy * 78.0, h);
+                        true
+                    })
                     || (a.page == Page::Updater && {
                         a.updater.scroll_by(dy * 78.0, h);
                         true
@@ -1544,10 +1832,10 @@ fn tool(hwnd: HWND, id: u8) {
         6 => shell("control.exe", "powercfg.cpl"),
         7 => shell("ms-settings:defaultapps", ""),
         8 => shell("windowsdefender:", ""),
-        9 => bosun_core::clean::journal_dir().is_some_and(|d| {
-            let _ = std::fs::create_dir_all(&d);
-            shell(&d.to_string_lossy(), "")
-        }),
+        9 => {
+            open_rescue(hwnd);
+            true
+        }
         // Care scans limited to one module (bits = scan::MODULES order)
         10 => {
             scan(1 << 3);
@@ -1623,6 +1911,11 @@ fn speed_info() -> crate::pages::speedup::SpeedInfo {
 /// A default-size Care view for layout tests.
 #[cfg(test)]
 pub fn test_view() -> View {
+    idle_view()
+}
+
+/// The Care page at rest at the default size (tests, skin previews).
+pub fn idle_view() -> View {
     View {
         page: Page::Care,
         w: DEFAULT_W,
@@ -1642,6 +1935,11 @@ pub fn test_view() -> View {
         tools: false,
         protect: Default::default(),
         updater: None,
+        rescue: None,
+        menu: None,
+        about: false,
+        settings: None,
+        bell: None,
         note: None,
         maximized: false,
     }

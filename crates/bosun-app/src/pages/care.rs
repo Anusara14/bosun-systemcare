@@ -28,7 +28,6 @@ const R_BLADES: f32 = 115.0;
 const R_BLADES_IN: f32 = 96.0;
 const R_BTN: f32 = 88.0;
 const BEVEL: f32 = 5.0;
-const R_GLOW: f32 = 150.0;
 const BLADES: usize = 6;
 const SWITCH_W: f32 = 265.0;
 const SWITCH_H: f32 = 45.0;
@@ -194,15 +193,13 @@ fn draw_blades(p: &Painter, cx: f32, cy: f32, h: f32) {
             at(R_BLADES_IN + 6.0, t - 0.20),
             at(R_BLADES_IN, t - 0.28),
         ];
-        p.curve(seam, 5.5, col(0x13213A));
+        let seam_c = if bosun_ui::gfx::is_light() {
+            0xCFE0F5
+        } else {
+            0x13213A
+        };
+        p.curve(seam, 5.5, col(seam_c));
     }
-}
-
-/// Under-dial glow strength for hover progress `h`: it vanishes in the first
-/// quarter of the hover-in and only returns in the last quarter of hover-out.
-pub fn under_glow(h: f32) -> f32 {
-    let x = (h / 0.25).clamp(0.0, 1.0);
-    1.0 - x * x * (3.0 - 2.0 * x)
 }
 
 fn smooth(edge0: f32, edge1: f32, h: f32) -> f32 {
@@ -238,39 +235,50 @@ fn draw_dial(p: &Painter, v: &View) {
     let (cx, cy) = center(v);
     let h = v.scan_hover;
     let pressed = v.hover == Hit::Scan && v.pressed == Hit::Scan;
-    // Faint haze all the way round, a touch stronger below (as in the reference).
-    let s = R_RIM / R_GLOW;
+    let light = bosun_ui::gfx::is_light();
+    // One soft halo that melts into the background: centred a little low so
+    // light pools under the dial, reaching ~48 px past the rim with a
+    // gaussian-like falloff. Hovering eases it down (never off) across the
+    // whole transition, so it breathes rather than switching.
+    let glow = 1.0 - 0.7 * smooth(0.0, 1.0, h);
+    let reach = R_RIM + 48.0;
+    let k = |r: f32| r / reach;
+    let blue = 0x3F8CEB;
+    let peak = if light { 0.38 } else { 0.42 } * glow;
+    let halo = [
+        (k(R_RIM - 6.0), cola(blue, peak)),
+        (k(R_RIM + 4.0), cola(blue, peak * 0.62)),
+        (k(R_RIM + 12.0), cola(blue, peak * 0.34)),
+        (k(R_RIM + 22.0), cola(blue, peak * 0.15)),
+        (k(R_RIM + 34.0), cola(blue, peak * 0.05)),
+        (1.0, cola(blue, 0.0)),
+    ];
+    p.radial(cx, cy + 6.0, reach, &halo);
+    // a faint even haze all round keeps the top from going flat
     let haze = [
-        (s, cola(0x3F86D8, 0.16)),
-        (s + 0.08, cola(0x3F86D8, 0.06)),
-        (1.0, cola(0x3F86D8, 0.0)),
+        (k(R_RIM), cola(blue, 0.10 * glow)),
+        (k(R_RIM + 18.0), cola(blue, 0.03 * glow)),
+        (1.0, cola(blue, 0.0)),
     ];
-    p.radial(cx, cy, R_GLOW, &haze);
-    // At rest, light pools under the dial: a glow centred a little below the
-    // dial peeks out past the rim as a crescent, thick at the bottom and
-    // thinning to nothing at the top. It fades away while hovered.
-    let (dy, rg) = (7.0, R_RIM + 15.0);
-    let a = 0.55 * under_glow(h);
-    if a > 0.0 {
-        let pool = [
-            (0.80, cola(0x4A8FE0, a)),
-            (0.90, cola(0x4A8FE0, a * 0.35)),
-            (1.0, cola(0x4A8FE0, 0.0)),
-        ];
-        p.radial(cx, cy + dy, rg, &pool);
-    }
-    // Light-blue rim all the way round (brightest at the top), on a dark edge.
-    p.circle(cx, cy, R_RIM + 1.0, col(0x0D1A30));
+    p.radial(cx, cy, reach, &haze);
+    // Thin light rim on the dark band (no heavy outer edge).
+    let band = if light { 0xCFE0F5 } else { 0x13213A };
+    p.circle(cx, cy, R_RIM + 0.5, col(band));
     let rim = [
-        (0.0, col(0x5A8FCF)),
-        (0.5, col(0x3F6FA5)),
-        (1.0, col(0x34608F)),
+        (0.0, cola(0x8EC2F5, 0.95)),
+        (0.5, cola(0x6FA6E0, 0.85)),
+        (1.0, cola(0x5A8FCF, 0.75)),
     ];
-    p.ring_linear(cx, cy, R_RIM - 1.0, 3.0, &rim);
-    p.circle(cx, cy, R_BAND - 0.5, col(0x13213A));
+    p.ring_linear(cx, cy, R_RIM - 0.8, 1.6, &rim);
+    p.circle(cx, cy, R_BAND - 0.5, col(band));
     draw_blades(p, cx, cy, h);
     // dark ring between blades and button
-    p.circle(cx, cy, R_BLADES_IN, col(0x0B111C));
+    p.circle(
+        cx,
+        cy,
+        R_BLADES_IN,
+        col(if light { 0xBFD5EE } else { 0x0B111C }),
+    );
     // button: bevel ring (light top → dark bottom), then the face
     let bevel = [
         (0.0, mix(0x6A6A6A, 0x7A7A7A, h)),
@@ -373,6 +381,11 @@ mod tests {
             tools: false,
             protect: Default::default(),
             updater: None,
+            rescue: None,
+            menu: None,
+            about: false,
+            settings: None,
+            bell: None,
             note: None,
             maximized: false,
         }
@@ -390,14 +403,6 @@ mod tests {
         // leaving: magnifier still full ~100 ms in (u ~0.67), word not back
         let (t, i) = label_fades(0.67, false);
         assert!(t == 0.0 && i > 0.9);
-    }
-
-    #[test]
-    fn under_glow_follows_the_reference() {
-        assert_eq!(under_glow(0.0), 1.0);
-        assert!(under_glow(0.10) < 0.75);
-        assert_eq!(under_glow(0.25), 0.0);
-        assert_eq!(under_glow(1.0), 0.0);
     }
 
     #[test]

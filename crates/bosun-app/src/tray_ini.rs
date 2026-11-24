@@ -2,11 +2,17 @@
 //! lines), so Speed Up's Real-Time TuneUp switches share the tray's settings.
 //! ponytail: the running tray reads the file at start; live sync needs the
 //! tray↔app pipe from the spec.
+//!
+//! The app's own settings go in `app.ini` beside it: the tray rewrites
+//! `tray.ini` with only its keys.
 
 use std::path::PathBuf;
 
-fn path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(r"Bosun\tray.ini"))
+const TRAY: &str = "tray.ini";
+pub const APP: &str = "app.ini";
+
+fn path(file: &str) -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Bosun").join(file))
 }
 
 /// `key`'s value in `text` as a switch; `default` when absent.
@@ -38,13 +44,21 @@ pub fn set_in(text: &str, key: &str, on: bool) -> String {
 }
 
 pub fn get(key: &str, default: bool) -> bool {
-    path()
+    get_from(TRAY, key, default)
+}
+
+pub fn set(key: &str, on: bool) -> std::io::Result<()> {
+    set_to(TRAY, key, on)
+}
+
+pub fn get_from(file: &str, key: &str, default: bool) -> bool {
+    path(file)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map_or(default, |t| get_in(&t, key, default))
 }
 
-pub fn set(key: &str, on: bool) -> std::io::Result<()> {
-    let p = path().ok_or_else(|| std::io::Error::other("APPDATA is unset"))?;
+pub fn set_to(file: &str, key: &str, on: bool) -> std::io::Result<()> {
+    let p = path(file).ok_or_else(|| std::io::Error::other("APPDATA is unset"))?;
     let text = std::fs::read_to_string(&p).unwrap_or_default();
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;

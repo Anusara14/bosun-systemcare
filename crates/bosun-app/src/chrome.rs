@@ -3,19 +3,10 @@
 //! notification / menu / minimise / maximise / close buttons on the right.
 
 use bosun_ui::gfx::{Align, Painter, col, cola, contains, rect};
-use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
-use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, DestroyWindow, MF_SEPARATOR, MF_STRING,
-    SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTALIGN, TrackPopupMenu,
-};
-use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::icons;
-use crate::pages::{ALL, Page};
+use crate::pages::ALL;
 use crate::window::{Hit, View};
 
 pub const TITLE_H: f32 = 44.0;
@@ -27,7 +18,6 @@ const BTN_CY: f32 = 21.0;
 mod cc {
     pub const PANEL: u32 = 0x1A1A1A;
     pub const SELECTED: u32 = 0x2E2E2E;
-    pub const HOVER: u32 = 0x242424;
     pub const TEXT: u32 = 0xFFFFFF;
     pub const ICON: u32 = 0xE4E4E4;
     pub const TEXT_2: u32 = 0xB0B0B0;
@@ -86,18 +76,15 @@ fn draw_sidebar(p: &Painter, v: &View) {
     for (i, page) in ALL.iter().enumerate() {
         let r = item_rect(i);
         let selected = v.page == *page;
-        let bg = if selected {
-            cc::SELECTED
-        } else if v.hover == Hit::Nav(*page) {
-            cc::HOVER
-        } else {
-            cc::PANEL
-        };
-        if bg != cc::PANEL {
+        // only the open page gets a box, as in the reference; hovering just
+        // brightens the icon and label
+        let bg = if selected { cc::SELECTED } else { cc::PANEL };
+        if selected {
             p.fill_rr(r, 8.0, col(bg));
         }
         let cx = (r.left + r.right) / 2.0;
-        let fg = col(if selected { cc::TEXT } else { cc::ICON });
+        let lit = selected || v.hover == Hit::Nav(*page);
+        let fg = col(if lit { cc::TEXT } else { cc::ICON });
         icons::nav(p, *page, cx, r.top + 35.0, fg, col(bg));
         let label = rect(r.left, r.top + 54.0, r.right - r.left, 20.0);
         p.text(page.label(), &f.m13sb, label, fg, Align::Center);
@@ -176,82 +163,10 @@ fn draw_title(p: &Painter, v: &View) {
     }
 }
 
-fn open(target: &str) {
-    // SAFETY: plain ShellExecute with owned strings.
-    unsafe {
-        ShellExecuteW(
-            None,
-            w!("open"),
-            &HSTRING::from(target),
-            None,
-            None,
-            SW_SHOWNORMAL,
-        );
-    }
-}
-
-/// The ☰ menu, dropped down from its button.
-pub fn show_menu(hwnd: HWND) {
-    // SAFETY: popup menu owned by our window and destroyed after use.
-    let choice = unsafe {
-        let dpi = GetDpiForWindow(hwnd).max(96);
-        let mut rc = windows::Win32::Foundation::RECT::default();
-        let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rc);
-        let w = bosun_ui::gfx::dip(rc.right, dpi);
-        let b = button_rect(w - 129.0);
-        let mut pt = POINT {
-            x: bosun_ui::gfx::px(b.right, dpi),
-            y: bosun_ui::gfx::px(b.bottom, dpi),
-        };
-        let _ = ClientToScreen(hwnd, &mut pt);
-        let Ok(menu) = CreatePopupMenu() else { return };
-        let add = |id: usize, text: PCWSTR| {
-            let _ = AppendMenuW(
-                menu,
-                if id == 0 { MF_SEPARATOR } else { MF_STRING },
-                id,
-                text,
-            );
-        };
-        add(1, w!("Performance Monitor"));
-        add(2, w!("About Bosun SystemCare"));
-        add(0, PCWSTR::null());
-        add(3, w!("Exit"));
-        let c = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_RIGHTALIGN,
-            pt.x,
-            pt.y,
-            None,
-            hwnd,
-            None,
-        )
-        .0;
-        let _ = DestroyMenu(menu);
-        c
-    };
-    match choice {
-        1 => {
-            // The tray opens its monitor when started a second time.
-            if let Some(dir) = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            {
-                open(&dir.join("bosun-tray.exe").to_string_lossy());
-            }
-        }
-        2 => crate::window::go(hwnd, Page::About),
-        // SAFETY: closing our own window ends the process.
-        3 => unsafe {
-            let _ = DestroyWindow(hwnd);
-        },
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pages::Page;
     use crate::window::{Mode, View};
 
     fn view() -> View {
@@ -274,6 +189,11 @@ mod tests {
             tools: false,
             protect: Default::default(),
             updater: None,
+            rescue: None,
+            menu: None,
+            about: false,
+            settings: None,
+            bell: None,
             note: None,
             maximized: false,
         }
@@ -295,6 +215,6 @@ mod tests {
         let v = view();
         assert_eq!(hit(&v, 80.0, 60.0), Hit::Nav(Page::Care));
         assert_eq!(hit(&v, 80.0, 60.0 + 88.0), Hit::Nav(Page::SpeedUp));
-        assert_eq!(hit(&v, 80.0, 60.0 + 4.0 * 88.0), Hit::Nav(Page::About));
+        assert_eq!(hit(&v, 80.0, 60.0 + 4.0 * 88.0), Hit::Nav(Page::Rescue));
     }
 }

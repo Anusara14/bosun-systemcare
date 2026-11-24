@@ -82,12 +82,16 @@ pub fn parse(out: &str) -> Vec<Update> {
     v
 }
 
-/// Packages winget can upgrade (slow: winget refreshes its sources).
+/// Packages winget can upgrade from its community source (a few seconds).
 pub fn list() -> std::io::Result<Vec<Update>> {
     let out = Command::new("winget")
         .args([
             "upgrade",
             "--include-unknown",
+            // ponytail: the msstore source makes the check ~2 min instead of ~5 s;
+            // Store apps update themselves through the Store anyway
+            "--source",
+            "winget",
             "--accept-source-agreements",
             "--disable-interactivity",
         ])
@@ -104,6 +108,8 @@ pub fn update(id: &str) -> std::io::Result<bool> {
             "--id",
             id,
             "--exact",
+            "--source",
+            "winget",
             "--silent",
             "--accept-package-agreements",
             "--accept-source-agreements",

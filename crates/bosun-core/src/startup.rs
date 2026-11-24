@@ -288,6 +288,53 @@ pub fn set_enabled(item: &Item, on: bool, dir: &Path) -> io::Result<()> {
     }
 }
 
+/// The name of Bosun's own Run entry (it starts the tray).
+pub const AUTOSTART_NAME: &str = "Bosun SystemCare";
+
+/// Our own entry in this user's Run key is there.
+pub fn autostart(name: &str) -> bool {
+    open_in(HKEY_CURRENT_USER, RUN, false).is_some_and(|k| string(&k, None, name).is_some())
+}
+
+/// Adds (`Some(command)`) or removes our own Run entry. Ours only, so no journal.
+pub fn set_autostart(name: &str, command: Option<&str>) -> io::Result<()> {
+    use windows::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+    use windows::Win32::System::Registry::{REG_SZ, RegDeleteValueW};
+    let mut h = HKEY::default();
+    // SAFETY: opens this user's Run key and writes or deletes one value of ours.
+    unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            &HSTRING::from(RUN),
+            None,
+            None,
+            REG_OPTION_NON_VOLATILE,
+            KEY_ALL_ACCESS,
+            None,
+            &mut h,
+            None,
+        )
+        .ok()
+        .map_err(|e| io::Error::from_raw_os_error(e.code().0))?;
+        let k = Key(h);
+        let r = match command {
+            Some(c) => {
+                let bytes: Vec<u8> = c
+                    .encode_utf16()
+                    .chain([0])
+                    .flat_map(u16::to_le_bytes)
+                    .collect();
+                RegSetValueExW(k.0, &HSTRING::from(name), None, REG_SZ, Some(&bytes))
+            }
+            None => match RegDeleteValueW(k.0, &HSTRING::from(name)) {
+                ERROR_FILE_NOT_FOUND => ERROR_SUCCESS,
+                r => r,
+            },
+        };
+        r.ok().map_err(|e| io::Error::from_raw_os_error(e.code().0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

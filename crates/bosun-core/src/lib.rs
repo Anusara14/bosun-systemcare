@@ -13,6 +13,7 @@ pub mod paths;
 pub mod privacy;
 pub mod procs;
 pub mod registry;
+pub mod rescue;
 pub mod security;
 pub mod services;
 pub mod shortcuts;

@@ -156,14 +156,23 @@ pub fn banner(p: &Painter, ok: bool, title: &str, count: Option<&str>, line: &st
     text_at(p, line, &f.m13, 13.0, 241.0, 600.0, 96.0, 0xB8B8B8);
 }
 
-fn toggle(p: &Painter, r: D2D_RECT_F, on: bool, hover: bool) {
-    if on {
-        p.fill_rr(r, 7.0, col(0x61ADF8));
-        p.circle(r.right - 7.0, r.top + 7.0, 4.5, col(0xFFFFFF));
-    } else {
-        p.fill_rr(r, 7.0, col(0x3A3A3A));
-        p.circle(r.left + 7.0, r.top + 7.0, 4.5, col(0xE6E6E6));
-    }
+pub(crate) fn toggle(p: &Painter, r: D2D_RECT_F, on: bool, hover: bool) {
+    let light = bosun_ui::gfx::is_light();
+    // exact colours in both skins: the knob is always white
+    p.untinted(|| {
+        if on {
+            p.fill_rr(r, 7.0, col(0x61ADF8));
+            p.circle(r.right - 7.0, r.top + 7.0, 4.5, col(0xFFFFFF));
+        } else {
+            p.fill_rr(r, 7.0, col(if light { 0xC2C2C2 } else { 0x3A3A3A }));
+            p.circle(
+                r.left + 7.0,
+                r.top + 7.0,
+                4.5,
+                col(if light { 0xFFFFFF } else { 0xE6E6E6 }),
+            );
+        }
+    });
     if hover {
         p.stroke_rr(r, 7.0, 1.0, cola(0xFFFFFF, 0.35));
     }

@@ -346,7 +346,8 @@ fn draw_title(p: &Painter, title: &str, x: f32, cap_y: f32) {
 
 pub(crate) fn pill(p: &Painter, r: D2D_RECT_F, label: &str, hover: bool) {
     let x = (r.left + r.right) / 2.0;
-    let rad = BTN_H / 2.0;
+    // half the button's own height: a true pill at any size, never an oval
+    let rad = (r.bottom - r.top) / 2.0;
     let stops = [(0.0, col(0x8DC3F8)), (1.0, col(0x6DB4F7))];
     p.fill_rr_linear(r, rad, (x, r.top), (x, r.bottom), &stops);
     if hover {
@@ -377,18 +378,8 @@ fn draw_tuneup(p: &Painter, v: &View, c: &D2D_RECT_F) {
     for (i, (label, on)) in rows.iter().enumerate() {
         let y = c.top + 103.5 + 22.0 * i as f32;
         text_at(p, label, &p.g.f.m13, 13.0, tx, 200.0, y, sp::TEXT);
-        let t = toggle(c, i);
-        let r = 7.0;
-        if *on {
-            p.fill_rr(t, r, col(sp::BLUE));
-            p.circle(t.right - 7.0, t.top + 7.0, 4.5, col(0xFFFFFF));
-        } else {
-            p.fill_rr(t, r, col(0x3A3A3A));
-            p.circle(t.left + 7.0, t.top + 7.0, 4.5, col(0xE6E6E6));
-        }
-        if v.hover == Hit::Toggle(i as u8) {
-            p.stroke_rr(t, r, 1.0, cola(0xFFFFFF, 0.35));
-        }
+        // the shared switch: white knob in both skins
+        crate::pages::protect::toggle(p, toggle(c, i), *on, v.hover == Hit::Toggle(i as u8));
     }
 }
 

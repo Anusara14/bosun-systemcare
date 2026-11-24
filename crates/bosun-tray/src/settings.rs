@@ -7,6 +7,10 @@ pub struct Settings {
     pub widget_visible: bool,
     pub widget_pos: Option<(i32, i32)>,
     pub auto_ram_clean: bool,
+    /// The widget stays above other windows ("Pin it up front").
+    pub widget_pinned: bool,
+    /// The widget is drawn see-through.
+    pub widget_transparent: bool,
 }
 
 impl Default for Settings {
@@ -15,6 +19,8 @@ impl Default for Settings {
             widget_visible: true,
             widget_pos: None,
             auto_ram_clean: false,
+            widget_pinned: true,
+            widget_transparent: false,
         }
     }
 }
@@ -34,6 +40,8 @@ impl Settings {
             match k.trim() {
                 "widget_visible" => s.widget_visible = v.trim() != "0",
                 "auto_ram_clean" => s.auto_ram_clean = v.trim() == "1",
+                "widget_pinned" => s.widget_pinned = v.trim() != "0",
+                "widget_transparent" => s.widget_transparent = v.trim() == "1",
                 "widget_x" => x = v.trim().parse().ok(),
                 "widget_y" => y = v.trim().parse().ok(),
                 _ => {}
@@ -45,9 +53,11 @@ impl Settings {
 
     pub fn serialize(&self) -> String {
         let mut out = format!(
-            "widget_visible={}\nauto_ram_clean={}\n",
+            "widget_visible={}\nauto_ram_clean={}\nwidget_pinned={}\nwidget_transparent={}\n",
             u8::from(self.widget_visible),
-            u8::from(self.auto_ram_clean)
+            u8::from(self.auto_ram_clean),
+            u8::from(self.widget_pinned),
+            u8::from(self.widget_transparent)
         );
         if let Some((x, y)) = self.widget_pos {
             out.push_str(&format!("widget_x={x}\nwidget_y={y}\n"));
@@ -81,6 +91,8 @@ mod tests {
             widget_visible: false,
             widget_pos: Some((-120, 40)),
             auto_ram_clean: true,
+            widget_pinned: false,
+            widget_transparent: true,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

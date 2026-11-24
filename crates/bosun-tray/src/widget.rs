@@ -260,10 +260,16 @@ pub fn render() {
         }
         let fr = fr.unwrap_or(STILL);
         let hover = wd.hover;
+        // "Transparency" in the widget's menu: see-through at 70 %
+        let alpha = if with_state(|s| s.settings.widget_transparent).unwrap_or(false) {
+            179
+        } else {
+            255
+        };
         let ok = wd
             .surf
             .as_ref()
-            .is_some_and(|s| s.present(wd.hwnd, |p| draw(p, ram, cpu, hover, &fr)));
+            .is_some_and(|s| s.present_alpha(wd.hwnd, alpha, |p| draw(p, ram, cpu, hover, &fr)));
         if !ok {
             wd.surf = None;
         }
@@ -387,10 +393,41 @@ pub fn show() {
             anim: None,
         })
     });
+    apply_pin();
     render();
 }
 
+/// Redraws the widget even if nothing it shows changed (a setting did).
+pub fn refresh() {
+    with_widget(|wd| wd.shown = None);
+    render();
+}
+
+/// "Pin it up front": above other windows, or an ordinary window.
+pub fn apply_pin() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE,
+    };
+    let pinned = with_state(|s| s.settings.widget_pinned).unwrap_or(true);
+    if let Some(hwnd) = with_widget(|wd| wd.hwnd) {
+        let after = if pinned { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        // SAFETY: re-ordering our own window.
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                Some(after),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
 pub fn hide() {
+    crate::wmenu::hide();
     popup::hide();
     let hwnd = WIDGET.with(|w| w.borrow_mut().take().map(|wd| wd.hwnd));
     if let Some(h) = hwnd {
@@ -521,7 +558,7 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             return LRESULT(0);
         }
         WM_RBUTTONUP | WM_NCRBUTTONUP => {
-            post(Cmd::Menu);
+            crate::wmenu::show();
             return LRESULT(0);
         }
         WM_TIMER if wp.0 == ANIM_TIMER => render(),

@@ -95,6 +95,11 @@ impl Surface {
     /// Draws a frame with `f` and pushes it to `hwnd`. Returns false if the
     /// surface must be recreated.
     pub fn present(&self, hwnd: HWND, f: impl FnOnce(&Painter)) -> bool {
+        self.present_alpha(hwnd, 255, f)
+    }
+
+    /// `present` with the whole window drawn at `alpha` (255 = opaque).
+    pub fn present_alpha(&self, hwnd: HWND, alpha: u8, f: impl FnOnce(&Painter)) -> bool {
         // SAFETY: draws into our DIB, then hands it to the layered window.
         unsafe {
             let rc = RECT {
@@ -118,7 +123,7 @@ impl Surface {
             }
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
-                SourceConstantAlpha: 255,
+                SourceConstantAlpha: alpha,
                 AlphaFormat: AC_SRC_ALPHA as u8,
                 ..Default::default()
             };

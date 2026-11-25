@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "bosun-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bosun-core",
  "bosun-ui",
@@ -15,15 +15,24 @@ dependencies = [
 
 [[package]]
 name = "bosun-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
  "windows",
 ]
 
 [[package]]
+name = "bosun-setup"
+version = "0.2.0"
+dependencies = [
+ "bosun-core",
+ "embed-resource",
+ "windows",
+]
+
+[[package]]
 name = "bosun-tray"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bosun-core",
  "bosun-ui",
@@ -34,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "bosun-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "windows",
  "windows-numerics",

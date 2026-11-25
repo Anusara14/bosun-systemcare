@@ -1,10 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/bosun-core", "crates/bosun-ui", "crates/bosun-tray", "crates/bosun-app"]
+members = ["crates/bosun-core", "crates/bosun-ui", "crates/bosun-tray", "crates/bosun-app", "crates/bosun-setup"]
 
 [workspace.package]
 edition = "2024"
-version = "0.1.0"
+version = "0.2.0"
 license = "Proprietary"
 
 [workspace.dependencies]

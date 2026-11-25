@@ -156,6 +156,10 @@ fn draw_title(p: &Painter, v: &View) {
             &f.icon12
         };
         p.glyph(glyph, font, r, c);
+        if h == Hit::Bell && v.unread {
+            let (cx, cy) = ((r.left + r.right) / 2.0 + 6.0, r.top + 9.0);
+            p.circle(cx, cy, 3.5, col(0xF5A56A));
+        }
     }
     if let Some(note) = v.note {
         let r = rect(SIDEBAR_W, TITLE_H, v.w - SIDEBAR_W, 22.0);
@@ -194,6 +198,8 @@ mod tests {
             about: false,
             settings: None,
             bell: None,
+            notices: None,
+            unread: false,
             note: None,
             maximized: false,
         }

@@ -16,6 +16,10 @@ pub struct Settings {
     pub auto_clean_last: u64,
     /// Turn Turbo Boost on when the tray starts (at Windows startup).
     pub turbo_at_startup: bool,
+    /// Notifications (Settings > Notifications).
+    pub notify_auto_ram: bool,
+    pub notify_homepage: bool,
+    pub notify_auto_clean: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +33,9 @@ impl Default for Settings {
             auto_clean: false,
             auto_clean_last: 0,
             turbo_at_startup: false,
+            notify_auto_ram: true,
+            notify_homepage: true,
+            notify_auto_clean: true,
         }
     }
 }
@@ -66,6 +73,9 @@ impl Settings {
                 "auto_clean" => s.auto_clean = v.trim() == "1",
                 "auto_clean_last" => s.auto_clean_last = v.trim().parse().unwrap_or(0),
                 "turbo_at_startup" => s.turbo_at_startup = v.trim() == "1",
+                "notify_auto_ram" => s.notify_auto_ram = v.trim() != "0",
+                "notify_homepage" => s.notify_homepage = v.trim() != "0",
+                "notify_auto_clean" => s.notify_auto_clean = v.trim() != "0",
                 "widget_x" => x = v.trim().parse().ok(),
                 "widget_y" => y = v.trim().parse().ok(),
                 _ => {}
@@ -88,6 +98,15 @@ impl Settings {
             u8::from(self.auto_clean),
             self.auto_clean_last,
             u8::from(self.turbo_at_startup)
+        ));
+        out.push_str(&format!(
+            "notify_auto_ram={}
+notify_homepage={}
+notify_auto_clean={}
+",
+            u8::from(self.notify_auto_ram),
+            u8::from(self.notify_homepage),
+            u8::from(self.notify_auto_clean)
         ));
         if let Some((x, y)) = self.widget_pos {
             out.push_str(&format!("widget_x={x}\nwidget_y={y}\n"));
@@ -126,6 +145,9 @@ mod tests {
             auto_clean: true,
             auto_clean_last: 1_795_000_000,
             turbo_at_startup: true,
+            notify_auto_ram: false,
+            notify_homepage: true,
+            notify_auto_clean: false,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

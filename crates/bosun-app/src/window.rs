@@ -178,6 +178,8 @@ pub enum Hit {
     OptGo,
     OptStatus(usize),
     OptRefresh,
+    /// Startup Items: measure Boot time / Impact (administrator prompt).
+    OptMeasure,
     OptRescue,
     OptSystem,
     OptRemove(usize),
@@ -234,6 +236,10 @@ pub enum Hit {
     BellToggle(u8),
     BellAll,
     BellClose,
+    /// The bell's notifications: an entry, "Clear all", outside (closes).
+    NoticeItem(u8),
+    NoticeClear,
+    NoticeOutside,
 }
 
 impl Hit {
@@ -280,6 +286,9 @@ pub struct View {
     pub settings: Option<crate::pages::settings::SettingsView>,
     /// The bell's panel, when open (it covers the whole window).
     pub bell: Option<crate::pages::actions::Actions>,
+    /// The bell's drop-down (newest first), when open; and the bell's dot.
+    pub notices: Option<Vec<bosun_core::notices::Notice>>,
+    pub unread: bool,
     pub note: Option<&'static str>,
     pub maximized: bool,
 }
@@ -313,6 +322,8 @@ struct App {
     about: bool,
     settings: Option<crate::pages::settings::SettingsView>,
     bell: Option<crate::pages::actions::Actions>,
+    notices: Option<Vec<bosun_core::notices::Notice>>,
+    unread: bool,
     /// Running layout change between modes: (start, from, to).
     mode_anim: Option<(Instant, f32, f32)>,
     /// Running hover transition: (start, from, to).
@@ -362,6 +373,8 @@ impl App {
             about: self.about,
             settings: self.settings.clone(),
             bell: self.bell,
+            notices: self.notices.clone(),
+            unread: self.unread,
             note: self
                 .note
                 .filter(|(_, at)| at.elapsed().as_secs() < 5)
@@ -379,6 +392,9 @@ pub fn hit(v: &View, x: f32, y: f32) -> Hit {
     }
     if v.menu.is_some() {
         return pages::menu::menu_hit(v, x, y);
+    }
+    if let Some(n) = &v.notices {
+        return pages::notices::hit(v, n, x, y);
     }
     if let Some(s) = &v.settings {
         return pages::settings::hit(v, s, x, y);
@@ -516,6 +532,9 @@ pub fn create(request: Request) -> Result<()> {
                 // capture hook: BOSUN_BELL=1 opens the bell's panel
                 bell: std::env::var_os("BOSUN_BELL")
                     .map(|_| crate::pages::actions::Actions::load(false)),
+                // capture hook: BOSUN_NOTICES=1 opens the bell's notifications
+                notices: std::env::var_os("BOSUN_NOTICES").map(|_| bosun_core::notices::load()),
+                unread: bosun_core::notices::unread(),
                 // capture hook: BOSUN_SETTINGS=<tree row> opens Settings on that page
                 settings: std::env::var("BOSUN_SETTINGS")
                     .ok()
@@ -691,6 +710,8 @@ struct Key {
     about: bool,
     settings: Option<crate::pages::settings::SettingsView>,
     bell: Option<crate::pages::actions::Actions>,
+    notices: Option<Vec<bosun_core::notices::Notice>>,
+    unread: bool,
     note: Option<&'static str>,
     maximized: bool,
 }
@@ -721,6 +742,8 @@ impl Key {
             about: v.about,
             settings: v.settings.clone(),
             bell: v.bell,
+            notices: v.notices.clone(),
+            unread: v.unread,
             note: v.note,
             maximized: v.maximized,
         }
@@ -1027,6 +1050,24 @@ fn click(hwnd: HWND, h: Hit) {
             invalidate(hwnd);
         }
         Hit::MenuItem(k) => menu_item(hwnd, k),
+        Hit::NoticeItem(k) => {
+            // opens the page the notification is about
+            let page = with_app(|a| {
+                let n = a.notices.take()?;
+                n.get(k as usize).and_then(|x| Page::from_arg(&x.page))
+            })
+            .flatten();
+            if let Some(p) = page {
+                apply_request(
+                    hwnd,
+                    Request {
+                        page: Some(p),
+                        ..Default::default()
+                    },
+                );
+            }
+            invalidate(hwnd);
+        }
         Hit::MenuOutside | Hit::AboutClose => {
             with_app(|a| {
                 a.menu = None;
@@ -1297,6 +1338,13 @@ fn click(hwnd: HWND, h: Hit) {
                         }
                     }
                 }
+                Hit::OptMeasure => {
+                    if let Some(o) = a.opt.as_mut() {
+                        o.measure();
+                        // SAFETY: poll timer on our own window, killed when the run ends.
+                        unsafe { SetTimer(Some(hwnd), DRIVER_TIMER, 250, None) };
+                    }
+                }
                 Hit::OptRefresh => {
                     if let Some(o) = a.opt.as_mut() {
                         if o.finder_mode {
@@ -1373,7 +1421,18 @@ fn click(hwnd: HWND, h: Hit) {
                         crate::scan::ALL
                     }
                 }
-                Hit::Bell => a.bell = Some(crate::pages::actions::Actions::load(a.auto_fix)),
+                Hit::Bell => {
+                    a.notices = Some(bosun_core::notices::load());
+                    bosun_core::notices::mark_seen();
+                    a.unread = false;
+                }
+                Hit::NoticeOutside => a.notices = None,
+                Hit::NoticeClear => {
+                    if bosun_core::notices::clear().is_err() {
+                        a.note = Some(("Couldn't clear the notifications.", Instant::now()));
+                    }
+                    a.notices = Some(Vec::new());
+                }
                 Hit::BellClose => a.bell = None,
                 Hit::BellToggle(_) | Hit::BellAll => {
                     if let Some(b) = a.bell {
@@ -1468,10 +1527,7 @@ fn menu_item(hwnd: HWND, k: u8) {
         }
         3 => open_rescue(hwnd),
         4 => {
-            if let Some(d) = bosun_core::clean::journal_dir() {
-                let _ = std::fs::create_dir_all(&d);
-                shell(&d.to_string_lossy(), "");
-            }
+            with_app(|a| a.bell = Some(crate::pages::actions::Actions::load(a.auto_fix)));
         }
         5 => {
             shell("ms-settings:windowsupdate", "");
@@ -1667,6 +1723,13 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
                 invalidate(hwnd);
             }
             return LRESULT(0);
+        }
+        windows::Win32::UI::WindowsAndMessaging::WM_ACTIVATE if (wp.0 & 0xFFFF) != 0 => {
+            // coming back to the window: new notifications light the bell
+            let unread = bosun_core::notices::unread();
+            if with_app(|a| std::mem::replace(&mut a.unread, unread) != unread) == Some(true) {
+                invalidate(hwnd);
+            }
         }
         WM_SETCURSOR => {
             if with_app(|a| a.hover.clickable() && a.hover != Hit::Max).unwrap_or(false) {
@@ -2065,6 +2128,8 @@ pub fn idle_view() -> View {
         about: false,
         settings: None,
         bell: None,
+        notices: None,
+        unread: false,
         note: None,
         maximized: false,
     }

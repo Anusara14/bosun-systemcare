@@ -386,6 +386,8 @@ mod tests {
             about: false,
             settings: None,
             bell: None,
+            notices: None,
+            unread: false,
             note: None,
             maximized: false,
         }

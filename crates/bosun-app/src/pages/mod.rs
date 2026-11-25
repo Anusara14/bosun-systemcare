@@ -3,6 +3,7 @@
 pub mod actions;
 pub mod care;
 pub mod menu;
+pub mod notices;
 pub mod optimizer;
 
 pub mod protect;
@@ -65,6 +66,9 @@ pub fn draw(p: &Painter, v: &View) {
     }
     if v.about {
         menu::draw_about(p, v);
+    }
+    if let Some(n) = &v.notices {
+        notices::draw(p, v, n);
     }
 }
 

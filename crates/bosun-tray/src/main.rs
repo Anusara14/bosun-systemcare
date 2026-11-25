@@ -40,6 +40,10 @@ const WM_OTHER_INSTANCE: u32 = WM_APP + 2;
 const WM_CMD: u32 = WM_APP + 3;
 /// Background RAM clean finished; lParam = bytes freed.
 const WM_CLEANED: u32 = WM_APP + 4;
+/// The daily Auto Clean process ended.
+const WM_AUTOCLEANED: u32 = WM_APP + 5;
+/// Homepage Advisor looks every this many ticks (2 s each: 5 minutes).
+const HOMEPAGE_EVERY: u32 = 150;
 /// Auto RAM Clean: trigger at this load, at most this often.
 const AUTO_CLEAN_PCT: u32 = 85;
 const AUTO_CLEAN_GAP: std::time::Duration = std::time::Duration::from_secs(600);
@@ -157,6 +161,14 @@ pub struct State {
     pub data: Data,
     pub settings: Settings,
     last_clean: Option<Instant>,
+    /// Page a click on the last notification opens.
+    pub notice_page: Option<&'static str>,
+    /// The next "Memory released" card is skipped (an automatic clean with
+    /// its notification switched off).
+    pub quiet_next: bool,
+    /// Homepage Advisor: the change we already told the user about.
+    homepage_seen: Option<String>,
+    ticks: u32,
 }
 
 impl State {
@@ -273,7 +285,74 @@ fn auto_junk_clean() {
         due
     });
     if due == Some(true) {
-        shell::open_main_args("--auto-clean");
+        start_auto_clean();
+    }
+}
+
+/// Runs `bosun.exe --auto-clean` and tells the host when it ends.
+fn start_auto_clean() {
+    let Some(exe) = shell::main_app_path() else {
+        return;
+    };
+    let host = host().0 as isize;
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new(exe).arg("--auto-clean").status();
+        // SAFETY: posting to the host window owned by the UI thread.
+        unsafe {
+            let _ = PostMessageW(Some(HWND(host as _)), WM_AUTOCLEANED, WPARAM(0), LPARAM(0));
+        }
+    });
+}
+
+/// "Auto Clean finished": the summary of its newest journal.
+fn auto_clean_notice() {
+    if with_state(|s| s.settings.notify_auto_clean) != Some(true) {
+        return;
+    }
+    let Some(dir) = bosun_core::clean::journal_dir() else {
+        return;
+    };
+    let newest = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.to_string_lossy().ends_with("-auto-clean.tsv"))
+        .max();
+    let entry = newest.and_then(|p| {
+        let text = std::fs::read_to_string(&p).ok()?;
+        bosun_core::rescue::parse(&p, &text)
+    });
+    if let Some(e) = entry {
+        tray::notify("Auto Clean finished", &e.summary, "rescue");
+    }
+}
+
+/// Homepage Advisor: one notification per change of the browser's
+/// homepage or search engine (checked every few minutes, Advisor on).
+fn homepage_watch() {
+    let check = with_state(|s| {
+        s.ticks = s.ticks.wrapping_add(1);
+        s.settings.notify_homepage && s.ticks % HOMEPAGE_EVERY == 1
+    });
+    if check != Some(true)
+        || !bosun_core::homepage::advisor_on()
+        || !bosun_core::homepage::changed()
+    {
+        return;
+    }
+    let now = bosun_core::homepage::fingerprint();
+    let new = with_state(|s| {
+        let new = s.homepage_seen.as_deref() != Some(now.as_str());
+        s.homepage_seen = Some(now);
+        new
+    });
+    if new == Some(true) {
+        tray::notify(
+            "Your browser's homepage changed",
+            "Homepage Advisor noticed a new homepage or search engine. Click to review it in Protect.",
+            "protect",
+        );
     }
 }
 
@@ -282,12 +361,17 @@ fn tick() {
     let auto = with_state(|s| {
         s.tick(open);
         let due = s.last_clean.is_none_or(|t| t.elapsed() >= AUTO_CLEAN_GAP);
-        s.settings.auto_ram_clean && due && s.data.vitals.mem.load_pct >= AUTO_CLEAN_PCT
+        let auto = s.settings.auto_ram_clean && due && s.data.vitals.mem.load_pct >= AUTO_CLEAN_PCT;
+        if auto {
+            s.quiet_next = !s.settings.notify_auto_ram;
+        }
+        auto
     });
     if auto == Some(true) {
         post(Cmd::CleanRam);
     }
     auto_junk_clean();
+    homepage_watch();
     widget::render();
     if open {
         monitor::invalidate();
@@ -437,6 +521,7 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
             }
         }
         WM_OTHER_INSTANCE => exec(Cmd::ShowMonitor),
+        WM_AUTOCLEANED => auto_clean_notice(),
         WM_CLEANED => {
             let ram = bosun_core::metrics::read_memory().load_pct;
             tick();
@@ -524,6 +609,10 @@ fn run() -> Result<()> {
                 data: Data::default(),
                 settings,
                 last_clean: None,
+                notice_page: None,
+                quiet_next: false,
+                homepage_seen: None,
+                ticks: 0,
             })
         });
 

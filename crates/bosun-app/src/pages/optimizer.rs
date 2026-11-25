@@ -102,6 +102,19 @@ pub struct OptView {
     pub finder_mode: bool,
     /// Still asking Windows Update.
     pub loading: bool,
+    /// Startup Items: Boot time / Impact measurement state.
+    pub measure: Measure,
+}
+
+/// The Startup Items tab's measurement (Boot time, Impact).
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum Measure {
+    #[default]
+    Never,
+    /// Unix seconds of the saved measurement.
+    At(u64),
+    Running,
+    Failed,
 }
 
 /// The window's optimizer state.
@@ -132,6 +145,11 @@ pub struct Optimizer {
     finder_rx: Option<std::sync::mpsc::Receiver<(u8, Vec<Found>)>>,
     /// Services tab also lists Windows' own services.
     pub show_system: bool,
+    /// Windows' startup measurements (when, programs), once measured.
+    impact: Option<(u64, Vec<bosun_core::startup_impact::Measured>)>,
+    /// The elevated measuring run in flight (true = it succeeded).
+    measure_rx: Option<std::sync::mpsc::Receiver<bool>>,
+    measure_failed: bool,
 }
 
 fn item_icon(item: &Item) -> HICON {
@@ -185,6 +203,9 @@ impl Optimizer {
             empty: None,
             finder_rx: None,
             show_system: false,
+            impact: bosun_core::startup_impact::load(),
+            measure_rx: None,
+            measure_failed: false,
         };
         o.reload();
         o
@@ -247,7 +268,59 @@ impl Optimizer {
     }
 
     /// Picks up finished searches; `true` while any is still running.
+    /// Runs `bosun.exe --measure-startup` through the administrator prompt;
+    /// `poll_drivers` picks up the result.
+    pub fn measure(&mut self) {
+        if self.measure_rx.is_some() {
+            return;
+        }
+        let (Ok(exe), Some(out)) = (
+            std::env::current_exe(),
+            bosun_core::startup_impact::cache_path(),
+        ) else {
+            self.measure_failed = true;
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let args = format!("--measure-startup \"{}\"", out.display());
+            let ok = matches!(
+                bosun_core::elevate::run(&exe.to_string_lossy(), &args, &|| false),
+                Ok(bosun_core::elevate::Outcome::Exited(0))
+            );
+            let _ = tx.send(ok);
+        });
+        self.measure_failed = false;
+        self.measure_rx = Some(rx);
+    }
+
+    fn boot(&self, it: &Item) -> Option<&bosun_core::startup_impact::Measured> {
+        let exe = it
+            .exe
+            .as_ref()?
+            .file_name()?
+            .to_string_lossy()
+            .to_lowercase();
+        self.impact.as_ref()?.1.iter().find(|m| m.exe == exe)
+    }
+
     pub fn poll_drivers(&mut self) -> bool {
+        if let Some(rx) = &self.measure_rx {
+            match rx.try_recv() {
+                Ok(ok) => {
+                    self.measure_failed = !ok;
+                    if ok {
+                        self.impact = bosun_core::startup_impact::load();
+                    }
+                    self.measure_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.measure_failed = true;
+                    self.measure_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
         if let Some(rx) = &self.finder_rx {
             match rx.try_recv() {
                 Ok((tab, v)) => {
@@ -281,7 +354,7 @@ impl Optimizer {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
-        self.driver_rx.is_some() || self.finder_rx.is_some()
+        self.driver_rx.is_some() || self.finder_rx.is_some() || self.measure_rx.is_some()
     }
 
     /// The App/Extension Cleaner: Programs (tab 5) and Browser Extensions (tab 4).
@@ -434,17 +507,27 @@ impl Optimizer {
                 Row {
                     idx: i,
                     name: it.name.trim_end_matches(".lnk").to_string(),
-                    a: match it.source {
-                        Source::UserFolder | Source::CommonFolder => "Startup folder",
-                        _ => "Registry",
-                    }
-                    .into(),
-                    b: if it.source.machine_wide() {
-                        "All users"
+                    a: if self.tab == 1 {
+                        // Boot time: CPU it used at the measured sign-in
+                        self.boot(it).map_or("—".into(), |m| boot_time(m.cpu_ms))
                     } else {
-                        "This user"
-                    }
-                    .into(),
+                        match it.source {
+                            Source::UserFolder | Source::CommonFolder => "Startup folder",
+                            _ => "Registry",
+                        }
+                        .into()
+                    },
+                    b: if self.tab == 1 {
+                        self.boot(it).map_or("—".into(), |m| {
+                            bosun_core::startup_impact::Impact::of(m)
+                                .label()
+                                .to_string()
+                        })
+                    } else if it.source.machine_wide() {
+                        "All users".into()
+                    } else {
+                        "This user".into()
+                    },
                     advice: advice(it),
                     pill: if it.enabled { Pill::On } else { Pill::Off },
                     checked: self.checked[i],
@@ -464,6 +547,15 @@ impl Optimizer {
             sort: self.sort,
             drivers_mode: self.drivers_mode,
             loading: self.driver_rx.is_some() || self.finder_rx.is_some(),
+            measure: if self.measure_rx.is_some() {
+                Measure::Running
+            } else if self.measure_failed {
+                Measure::Failed
+            } else {
+                self.impact
+                    .as_ref()
+                    .map_or(Measure::Never, |(at, _)| Measure::At(*at))
+            },
             finder_mode: self.finder_mode,
         }
     }
@@ -671,6 +763,15 @@ impl Optimizer {
             sort: self.sort,
             drivers_mode: self.drivers_mode,
             loading: self.driver_rx.is_some() || self.finder_rx.is_some(),
+            measure: if self.measure_rx.is_some() {
+                Measure::Running
+            } else if self.measure_failed {
+                Measure::Failed
+            } else {
+                self.impact
+                    .as_ref()
+                    .map_or(Measure::Never, |(at, _)| Measure::At(*at))
+            },
             finder_mode: self.finder_mode,
         }
     }
@@ -804,10 +905,12 @@ fn columns(tab: u8) -> [(&'static str, f32); 5] {
             ("Operation", 778.0),
         ]
     } else {
+        // the reference's Startup Items columns: Boot time, then our Impact
+        // (Task Manager's grading) in place of IObit's crowd "Disable rate"
         [
             ("Name", 49.0),
-            ("Starts from", 357.0),
-            ("Scope", 486.0),
+            ("Boot time", 357.0),
+            ("Impact", 486.0),
             ("Recommendation", 599.0),
             ("Status & Operation", 743.0),
         ]
@@ -817,6 +920,9 @@ fn columns(tab: u8) -> [(&'static str, f32); 5] {
 pub fn hit(v: &View, o: &OptView, x: f32, y: f32) -> Hit {
     if (x - 26.0).hypot(y - 23.5) <= 14.0 {
         return Hit::OptBack;
+    }
+    if o.tab == 1 && o.measure != Measure::Running && contains(&measure_link(), x, y) {
+        return Hit::OptMeasure;
     }
     let tabs = tab_list(o.apps_mode, o.drivers_mode, o.finder_mode);
     if let Some(i) = (0..tabs.len()).find(|&i| contains(&tab_rect(i), x, y)) {
@@ -968,9 +1074,7 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
             let wn = p.g.measure(&n, &f.pop_label);
             text_at(p, &n, &f.pop_label, 15.0, 38.0, wn + 2.0, 123.5, oc::ORANGE);
             let rest = match o.tab {
-                1 => {
-                    " startup items are found. System startup may be slowed down by the unnecessary ones."
-                }
+                1 => " startup items are found. Unneeded ones slow down sign-in.",
                 2 => {
                     " services are found. System startup may be slowed down by the unnecessary ones."
                 }
@@ -995,6 +1099,21 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
             );
         }
         _ => {}
+    }
+    if o.tab == 1 {
+        let t = measure_text(o.measure);
+        let link = o.measure != Measure::Running;
+        let c = match (link, v.hover == Hit::OptMeasure) {
+            (false, _) => oc::TEXT,
+            (true, true) => 0x8CC4FF,
+            (true, false) => 0x61ADF8,
+        };
+        let w = p.g.measure(&t, &f.m13);
+        let r = measure_link();
+        text_at(p, &t, &f.m13, 13.0, r.right - w, w + 4.0, 123.5, c);
+        if link {
+            p.line(r.right - w, 131.0, r.right, 131.0, 1.0, col(c));
+        }
     }
     let tb = table_bottom(v.h);
     let table = rect(TABLE_X, TABLE_TOP, 879.0, tb - TABLE_TOP);
@@ -1075,6 +1194,32 @@ pub fn draw(p: &Painter, v: &View, o: &OptView) {
             "Show System Services"
         };
         link(p, label, 848.0, foot, v.hover == Hit::OptSystem, true);
+    }
+}
+
+/// "1.2 s", "340 ms".
+fn boot_time(ms: u64) -> String {
+    if ms >= 1000 {
+        format!("{:.1} s", ms as f64 / 1000.0)
+    } else {
+        format!("{ms} ms")
+    }
+}
+
+/// Startup Items: the Measure link, right-aligned on the banner line.
+fn measure_link() -> D2D_RECT_F {
+    rect(916.0 - 260.0, 113.0, 260.0, 21.0)
+}
+
+fn measure_text(m: Measure) -> String {
+    match m {
+        Measure::Never => "Measure startup impact".into(),
+        Measure::Running => "Measuring… (approve Windows' prompt)".into(),
+        Measure::Failed => match bosun_core::startup_impact::last_error() {
+            Some(e) => format!("Couldn't measure ({e}) · Try again"),
+            None => "Not measured (prompt declined?) · Try again".into(),
+        },
+        Measure::At(t) => format!("Measured {} · Again", crate::pages::rescue::when(t * 1000)),
     }
 }
 

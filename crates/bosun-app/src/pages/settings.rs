@@ -21,7 +21,7 @@ const FOOT_Y: f32 = 600.0;
 const PAGE_X: f32 = 265.0;
 
 /// Tree rows: (label, indented). Rows 2..=10 are `MODULES`.
-const TREE: [(&str, bool); 15] = [
+const TREE: [(&str, bool); 16] = [
     ("General Settings", false),
     ("Clean & Optimize", false),
     ("Privacy Sweep", true),
@@ -36,6 +36,7 @@ const TREE: [(&str, bool); 15] = [
     ("Auto RAM Clean", false),
     ("Auto Clean", false),
     ("Ignore List", false),
+    ("Notifications", false),
     ("Logs & Backup", false),
 ];
 
@@ -89,6 +90,8 @@ pub struct Values {
     pub auto_ram: bool,
     /// Junk files cleaned once a day by the tray.
     pub auto_clean: bool,
+    /// Notifications: [automatic RAM clean, homepage change, Auto Clean done].
+    pub notify: [bool; 3],
     /// A System Restore point before each Fix.
     pub restore_point: bool,
     /// Care scan modules (bit i = `MODULES[i]`).
@@ -101,6 +104,7 @@ impl Values {
         widget: true,
         auto_ram: false,
         auto_clean: false,
+        notify: [true; 3],
         restore_point: false,
         picks: DEFAULT_PICKS,
     };
@@ -112,6 +116,7 @@ impl Values {
             widget: m.widget,
             auto_ram: m.auto_ram,
             auto_clean: crate::tray_ini::get("auto_clean", false),
+            notify: NOTIFY.map(|(key, _)| crate::tray_ini::get(key, true)),
             restore_point: crate::tray_ini::get_from(crate::tray_ini::APP, "restore_point", false),
             picks: saved_picks(),
         }
@@ -157,6 +162,7 @@ impl SettingsView {
             2 => d.auto_ram = !d.auto_ram,
             3 => d.restore_point = !d.restore_point,
             4 => d.auto_clean = !d.auto_clean,
+            5..=7 => d.notify[(k - 5) as usize] = !d.notify[(k - 5) as usize],
             k => d.picks ^= 1 << (k - 10),
         }
     }
@@ -181,6 +187,12 @@ impl SettingsView {
         }
         if d.auto_ram != s.auto_ram {
             crate::pages::menu::flip(&info, 2)?;
+        }
+        for (i, (key, _)) in NOTIFY.iter().enumerate() {
+            if d.notify[i] != s.notify[i] {
+                crate::tray_ini::set(key, d.notify[i])
+                    .map_err(|_| "Couldn't save the notification settings.")?;
+            }
         }
         if d.auto_clean != s.auto_clean {
             crate::tray_ini::set("auto_clean", d.auto_clean)
@@ -219,6 +231,9 @@ fn checks(sel: u8) -> Vec<(u8, f32)> {
         2..=10 => vec![(10 + sel - 2, 142.0)],
         11 => vec![(2, 142.0)],
         12 => vec![(4, 142.0)],
+        NOTIFY_PAGE => (0..NOTIFY.len())
+            .map(|i| (5 + i as u8, 107.0 + 28.0 * i as f32))
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -290,7 +305,7 @@ pub fn hit(v: &View, s: &SettingsView, x: f32, y: f32) -> Hit {
             .find(|&k| contains(&remove_link(k), x, y))
             .map_or(Hit::None, |k| Hit::SetUnignore(k as u8));
     }
-    if s.sel == 14 {
+    if s.sel == 15 {
         if contains(&OPEN_BTN, x, y) {
             return Hit::SetOpenLogs;
         }
@@ -303,6 +318,20 @@ pub fn hit(v: &View, s: &SettingsView, x: f32, y: f32) -> Hit {
         .find(|(_, cy)| contains(&check_row(v, *cy), x, y))
         .map_or(Hit::None, |(k, _)| Hit::SetCheck(k))
 }
+
+/// The Notifications page (tree row) and its switches: (tray.ini key, label).
+const NOTIFY_PAGE: u8 = 14;
+const NOTIFY: [(&str, &str); 3] = [
+    (
+        "notify_auto_ram",
+        "When Auto RAM Clean frees memory on its own",
+    ),
+    (
+        "notify_homepage",
+        "When your browser's homepage or search engine changes",
+    ),
+    ("notify_auto_clean", "When the daily Auto Clean finishes"),
+];
 
 /// The Ignore List page (tree row) and how many entries fit on it.
 const IGNORE_PAGE: u8 = 13;
@@ -335,6 +364,7 @@ fn check_line(p: &Painter, v: &View, s: &SettingsView, k: u8, cy: f32, label: &s
         2 => s.draft.auto_ram,
         3 => s.draft.restore_point,
         4 => s.draft.auto_clean,
+        5..=7 => s.draft.notify[(k - 5) as usize],
         k => s.draft.picks & 1 << (k - 10) != 0,
     };
     let hot = v.hover == Hit::SetCheck(k);
@@ -536,6 +566,31 @@ fn page(p: &Painter, v: &View, s: &SettingsView) {
                 400.0,
                 166.0,
                 0x8A8A8A,
+            );
+        }
+        NOTIFY_PAGE => {
+            head("Notifications");
+            text_at(
+                p,
+                "Show a notification:",
+                &f.m13sb,
+                13.0,
+                PAGE_X,
+                400.0,
+                82.0,
+                0xE6E6E6,
+            );
+            for (i, (_, label)) in NOTIFY.iter().enumerate() {
+                check_line(p, v, s, 5 + i as u8, 107.0 + 28.0 * i as f32, label);
+            }
+            para(
+                p,
+                &[
+                    "Notifications come from the Bosun icon in the taskbar; click one to open",
+                    "the page it is about. A Clean RAM you start yourself always shows its result.",
+                ],
+                PAGE_X,
+                205.0,
             );
         }
         IGNORE_PAGE => {

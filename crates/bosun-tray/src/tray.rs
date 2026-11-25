@@ -3,8 +3,8 @@
 use windows::Win32::Foundation::{LPARAM, POINT, WPARAM};
 use windows::Win32::UI::Controls::{LIM_SMALL, LoadIconMetric};
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
-    NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, HICON, MENU_ITEM_FLAGS, MF_CHECKED,
@@ -18,6 +18,7 @@ use crate::{Cmd, WM_TRAY, hinstance, host, post, shell, with_state};
 const ICON_ID: u32 = 1;
 const NIN_SELECT: u32 = 0x400;
 const NIN_KEYSELECT: u32 = 0x401;
+const NIN_BALLOONUSERCLICK: u32 = 0x405;
 
 const ID_OPEN: usize = 100;
 const ID_MONITOR: usize = 101;
@@ -58,6 +59,29 @@ pub fn add() {
     }
 }
 
+fn copy_into(dst: &mut [u16], s: &str) {
+    let w: Vec<u16> = s.encode_utf16().take(dst.len() - 1).collect();
+    dst[..w.len()].copy_from_slice(&w);
+    dst[w.len()] = 0;
+}
+
+/// A Windows notification from our icon; clicking it opens `page` in the
+/// main window (see `on_message`).
+pub fn notify(title: &str, text: &str, page: &'static str) {
+    with_state(|s| s.notice_page = Some(page));
+    // the main window's bell lists what was shown
+    let _ = bosun_core::notices::add(page, title, text);
+    let mut nid = base();
+    nid.uFlags = NIF_INFO;
+    nid.dwInfoFlags = NIIF_INFO;
+    copy_into(&mut nid.szInfoTitle, title);
+    copy_into(&mut nid.szInfo, text);
+    // SAFETY: nid is fully initialised for our host window.
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
+}
+
 pub fn remove() {
     // SAFETY: removing our own icon.
     unsafe {
@@ -88,6 +112,11 @@ pub fn on_message(_wp: WPARAM, lp: LPARAM) {
     match (lp.0 as u32) & 0xFFFF {
         NIN_SELECT | NIN_KEYSELECT => post(Cmd::ToggleMonitor),
         WM_CONTEXTMENU => post(Cmd::Menu),
+        NIN_BALLOONUSERCLICK => {
+            if let Some(page) = with_state(|s| s.notice_page.take()).flatten() {
+                shell::open_main_app(page);
+            }
+        }
         _ => {}
     }
 }

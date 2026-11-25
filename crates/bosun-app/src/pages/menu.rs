@@ -79,7 +79,7 @@ const ITEMS: [(&str, f32); 8] = [
     ("Settings…", 65.0),
     ("Performance Monitor", 97.0),
     ("Rescue Center", 152.0),
-    ("Journal Folder", 184.0),
+    ("Feature Switches", 184.0),
     ("Windows Update", 216.0),
     ("About", 271.0),
     ("Exit", 303.0),
@@ -157,7 +157,7 @@ fn item_icon(p: &Painter, k: usize, cx: f32, cy: f32) {
                 );
             }
         }
-        4 => glyph('\u{E8D5}'), // FolderOpen
+        4 => glyph('\u{E9E9}'), // Equalizer: the feature switches
         5 => glyph('\u{E895}'), // Sync
         6 => glyph('\u{E946}'), // Info
         _ => glyph('\u{E7E8}'), // PowerButton

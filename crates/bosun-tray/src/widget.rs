@@ -288,6 +288,14 @@ pub fn render() {
         // SAFETY: stopping our own animation timer.
         let _ = unsafe { KillTimer(Some(hwnd), ANIM_TIMER) };
         render();
+        announce(freed);
+    }
+}
+
+/// The "Memory released" card, unless this clean was automatic and its
+/// notification is switched off.
+fn announce(freed: u64) {
+    if with_state(|s| std::mem::take(&mut s.quiet_next)) != Some(true) {
         popup::show(freed);
     }
 }
@@ -328,7 +336,7 @@ pub fn clean_done(freed: u64, ram_now: u32) {
         None => false,
     });
     if animating == Some(false) {
-        popup::show(freed);
+        announce(freed);
     }
 }
 

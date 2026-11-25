@@ -103,6 +103,26 @@ fn main() {
     if std::env::args().any(|a| a == "--auto-clean") {
         return auto_clean();
     }
+    // elevated by the Startup Optimizer: read Windows' startup measurements
+    // into the file it names, then exit (0 = measured)
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(out) = args
+        .windows(2)
+        .find(|w| w[0] == "--measure-startup")
+        .map(|w| w[1].clone())
+    {
+        let out = std::path::Path::new(&out);
+        let err = out.with_extension("err");
+        let _ = std::fs::remove_file(&err);
+        match bosun_core::startup_impact::measure_into(out) {
+            Ok(_) => std::process::exit(0),
+            Err(e) => {
+                // the unelevated window shows why
+                let _ = std::fs::write(&err, e.to_string());
+                std::process::exit(1);
+            }
+        }
+    }
     if let Err(e) = run() {
         let text = HSTRING::from(format!("Bosun SystemCare could not start.\n\n{e}"));
         // SAFETY: modal error box with owned strings.

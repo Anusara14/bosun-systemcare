@@ -1,3 +1,18 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/export/png/bosun-lockup-horizontal-dark.png">
+    <img src="brand/export/png/bosun-lockup-horizontal-light.png" alt="Bosun SystemCare" width="480">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Anusara14/bosun-systemcare/releases/latest"><img src="https://img.shields.io/github/v/release/Anusara14/bosun-systemcare?label=release&color=1E9CFF" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?logo=windows" alt="Windows 10 | 11">
+  <img src="https://img.shields.io/badge/built%20with-Rust-B7410E?logo=rust" alt="Built with Rust">
+  <img src="https://img.shields.io/badge/tray-~10%20MB%20RAM-2B2B2B" alt="Tray uses about 10 MB of RAM">
+  <img src="https://img.shields.io/badge/telemetry-none-2ea44f" alt="No telemetry">
+</p>
+
 # Bosun SystemCare
 
 A small, honest PC care app for Windows 10/11, written in Rust. It cleans junk and privacy traces, fixes provably broken entries, manages startup items, keeps software up to date, and keeps a journal of every change so the Rescue Center can undo it.

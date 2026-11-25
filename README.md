@@ -20,7 +20,7 @@ A small, honest PC care app for Windows 10/11, written in Rust. It cleans junk a
 
 The design is a clean-room take on the classic "system care" layout ([SPEC.md](SPEC.md)). Features that are placebo or upsell in other tools are either replaced with something real or left out, and the spec says which.
 
-## What's in 0.2.0
+## What's in 0.2.1
 
 - **Care:** one SCAN over nine modules: Privacy Sweep, Junk Files, Shortcut Fixer, Registry Clean, Security check (Defender, Firewall), System Optimization, Disk Optimization, Windows Update. Recommended or Manual mode. Every Fix is journaled first, with an optional restore point.
 - **Speed Up:** Turbo Boost (power plan, services, background apps; can start with Windows), and a Startup Optimizer for startup items, services, scheduled tasks and browser extensions, with Boot time and Impact columns. Also App Cleaner, Driver Updates through Windows Update, and More Optimization Tools.
@@ -34,7 +34,7 @@ The design is a clean-room take on the classic "system care" layout ([SPEC.md](S
 
 ## Install
 
-Download `BosunSystemCare-Setup-0.2.0.exe` and run it. It installs for the current user, with no administrator rights:
+Download `BosunSystemCare-Setup-0.2.1.exe` from [Releases](https://github.com/Anusara14/bosun-systemcare/releases/latest) and run it. It installs for the current user, with no administrator rights:
 
 - Files go in `%LOCALAPPDATA%\Programs\Bosun SystemCare`.
 - It adds a Start menu shortcut and an "Apps & features" entry.
@@ -76,6 +76,11 @@ The workspace is split into four crates:
 - **Out of scope:** malware scanning, ad blocking, and a third-party driver installer (see SPEC §5).
 
 ## Release notes
+
+### 0.2.1 (2026-11-25)
+- **New:** Bosun updates itself from its GitHub releases. About checks for a newer version and installs it in one click. The tray checks once a day: with "Updates" on in the ☰ menu it installs the update itself, otherwise it shows a notification.
+- Every download is checked against its published SHA-256 before it runs.
+- Copies installed from 0.2.0 don't have the updater yet: install 0.2.1 once by hand, and later versions arrive on their own.
 
 ### 0.2.0 (2026-11-25)
 First installable release.

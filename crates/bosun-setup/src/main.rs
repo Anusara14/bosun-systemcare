@@ -72,11 +72,11 @@ fn tell(o: &Opts, text: &str, style: MESSAGEBOX_STYLE) {
 /// running.
 fn close_running() -> bool {
     let mut tray = false;
-    for class in [w!("BosunMain"), w!("BosunTrayHost")] {
+    for (class, is_tray) in [(w!("BosunMain"), false), (w!("BosunTrayHost"), true)] {
         // SAFETY: finds our own windows by class and posts them WM_CLOSE.
         unsafe {
             if let Ok(h) = FindWindowW(class, PCWSTR::null()) {
-                tray |= class == w!("BosunTrayHost");
+                tray |= is_tray;
                 let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
         }

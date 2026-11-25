@@ -20,6 +20,7 @@ pub mod registry;
 pub mod rescue;
 pub mod restore_point;
 pub mod security;
+pub mod self_update;
 pub mod services;
 pub mod shortcuts;
 pub mod startup;

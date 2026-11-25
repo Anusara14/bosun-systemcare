@@ -29,6 +29,7 @@ The design is a clean-room take on the classic "system care" layout ([SPEC.md](S
 - **Rescue Center:** browse and restore journaled changes.
 - **Tray:** a floating widget, the Performance Monitor (with Recently closed), Auto RAM Clean, Auto Clean once a day, and notifications. The bell in the main window lists past notifications.
 - **Look:** dark charcoal by default, plus a light skin.
+- **Updates:** About → "Check for updates" downloads the new installer from GitHub, checks its SHA-256 and updates in place. The tray checks once a day; turn on "Updates" in the ☰ menu to install them automatically.
 - **Memory:** the tray uses about 10 MB at rest. The main window closes completely when you close it.
 
 ## Install
@@ -66,7 +67,7 @@ The workspace is split into four crates:
 
 - Nothing destructive happens without a journal entry first. Files go to the Recycle Bin, except caches and temp files.
 - Microsoft-signed services and tasks, `HKLM\SYSTEM\CurrentControlSet\Control`, and drivers are never touched.
-- No telemetry. The only network use is winget and Windows Update.
+- No telemetry. The only network use is winget, Windows Update and the daily update check against this repo's GitHub releases.
 
 ## Known limits
 

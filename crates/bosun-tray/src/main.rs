@@ -42,6 +42,8 @@ const WM_CMD: u32 = WM_APP + 3;
 const WM_CLEANED: u32 = WM_APP + 4;
 /// The daily Auto Clean process ended.
 const WM_AUTOCLEANED: u32 = WM_APP + 5;
+/// A newer Bosun is out; wParam = major << 32 | minor << 16 | patch.
+const WM_UPDATE_OUT: u32 = WM_APP + 6;
 /// Homepage Advisor looks every this many ticks (2 s each: 5 minutes).
 const HOMEPAGE_EVERY: u32 = 150;
 /// Auto RAM Clean: trigger at this load, at most this often.
@@ -289,6 +291,53 @@ fn auto_junk_clean() {
     }
 }
 
+/// Once a day `bosun.exe --check-update` looks for a newer Bosun: it installs
+/// it itself when automatic updates are on, otherwise the tray says so.
+fn update_check() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let due = with_state(|s| {
+        let due = now.saturating_sub(s.settings.update_last) >= AUTO_JUNK_EVERY_SECS;
+        if due {
+            s.settings.update_last = now;
+            s.settings.save();
+        }
+        due
+    });
+    if due != Some(true) {
+        return;
+    }
+    let Some(exe) = shell::main_app_path() else {
+        return;
+    };
+    let host = host().0 as isize;
+    std::thread::spawn(move || {
+        let Ok(out) = std::process::Command::new(exe)
+            .arg("--check-update")
+            .output()
+        else {
+            return;
+        };
+        let version = String::from_utf8_lossy(&out.stdout);
+        let Some((a, b, c)) = bosun_core::self_update::parse_version(&version) else {
+            return;
+        };
+        if out.status.code() == Some(10) {
+            let packed = (a as usize) << 32 | (b as usize) << 16 | c as usize;
+            // SAFETY: posting to the host window owned by the UI thread.
+            unsafe {
+                let _ = PostMessageW(
+                    Some(HWND(host as _)),
+                    WM_UPDATE_OUT,
+                    WPARAM(packed),
+                    LPARAM(0),
+                );
+            }
+        }
+    });
+}
+
 /// Runs `bosun.exe --auto-clean` and tells the host when it ends.
 fn start_auto_clean() {
     let Some(exe) = shell::main_app_path() else {
@@ -371,6 +420,7 @@ fn tick() {
         post(Cmd::CleanRam);
     }
     auto_junk_clean();
+    update_check();
     homepage_watch();
     widget::render();
     if open {
@@ -522,6 +572,15 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
         }
         WM_OTHER_INSTANCE => exec(Cmd::ShowMonitor),
         WM_AUTOCLEANED => auto_clean_notice(),
+        WM_UPDATE_OUT => {
+            let v = wp.0;
+            let version = format!("{}.{}.{}", v >> 32, (v >> 16) & 0xFFFF, v & 0xFFFF);
+            tray::notify(
+                &format!("Bosun {version} is available"),
+                "Click to update. Turn on automatic updates in the ☰ menu.",
+                "about",
+            );
+        }
         WM_CLEANED => {
             let ram = bosun_core::metrics::read_memory().load_pct;
             tick();

@@ -178,6 +178,7 @@ impl SettingsView {
             tray_start: s.tray_start,
             auto_ram: s.auto_ram,
             advisor: false,
+            auto_update: false,
         };
         if d.widget != s.widget {
             crate::pages::menu::flip(&info, 0)?;

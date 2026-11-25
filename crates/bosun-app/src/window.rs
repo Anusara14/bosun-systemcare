@@ -41,16 +41,20 @@ pub struct Request {
     pub page: Option<Page>,
     pub scan: bool,
     pub settings: bool,
+    pub about: bool,
 }
 
 impl Request {
-    /// Low 4 bits: page index + 1 (0 = none); bit 4 scan; bit 5 settings.
+    /// Low 4 bits: page index + 1 (0 = none); bit 4 scan; bit 5 settings;
+    /// bit 6 About.
     pub fn encode(self) -> usize {
         let page = self
             .page
             .and_then(|p| pages::ALL.iter().position(|&q| q == p))
             .map_or(0, |i| i + 1);
-        page | usize::from(self.scan) << 4 | usize::from(self.settings) << 5
+        page | usize::from(self.scan) << 4
+            | usize::from(self.settings) << 5
+            | usize::from(self.about) << 6
     }
 
     pub fn decode(v: usize) -> Self {
@@ -60,6 +64,7 @@ impl Request {
                 .and_then(|i| pages::ALL.get(i).copied()),
             scan: v & 1 << 4 != 0,
             settings: v & 1 << 5 != 0,
+            about: v & 1 << 6 != 0,
         }
     }
 }
@@ -90,6 +95,9 @@ fn apply_request(hwnd: HWND, r: Request) {
     if r.settings {
         with_app(|a| a.settings = Some(crate::pages::settings::SettingsView::open()));
     }
+    if r.about {
+        open_about(hwnd);
+    }
     invalidate(hwnd);
 }
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -100,6 +108,8 @@ const SCAN_TIMER: usize = 5;
 /// Polls the Windows Update driver search while it runs.
 const DRIVER_TIMER: usize = 8;
 const UPDATE_TIMER: usize = 9;
+/// Polls Bosun's own update check or download.
+const SELF_UPDATE_TIMER: usize = 10;
 /// Test hook timers: with `BOSUN_HOVER_SCRIPT=1` the window replays the
 /// reference recording's hover (in, then out 1733 ms later, as in the
 /// recording) without a mouse, starting 1.5 s after launch,
@@ -221,6 +231,7 @@ pub enum Hit {
     /// About dialog.
     AboutClose,
     AboutLink(u8),
+    AboutUpdate,
     /// Settings: a tree row, a checkbox, the Logs & Backup buttons, the footer.
     SetNav(u8),
     SetCheck(u8),
@@ -282,6 +293,8 @@ pub struct View {
     /// The ☰ panel, when open, and the About dialog.
     pub menu: Option<crate::pages::menu::MenuInfo>,
     pub about: bool,
+    /// About's update line: (text, clickable).
+    pub update_line: (String, bool),
     /// The Settings dialog, when open (it covers the whole window).
     pub settings: Option<crate::pages::settings::SettingsView>,
     /// The bell's panel, when open (it covers the whole window).
@@ -320,6 +333,7 @@ struct App {
     rescue: crate::pages::rescue::RescueView,
     menu: Option<crate::pages::menu::MenuInfo>,
     about: bool,
+    self_update: crate::self_update::SelfUpdate,
     settings: Option<crate::pages::settings::SettingsView>,
     bell: Option<crate::pages::actions::Actions>,
     notices: Option<Vec<bosun_core::notices::Notice>>,
@@ -371,6 +385,7 @@ impl App {
             rescue: (self.page == Page::Rescue).then(|| self.rescue.clone()),
             menu: self.menu,
             about: self.about,
+            update_line: self.self_update.line(),
             settings: self.settings.clone(),
             bell: self.bell,
             notices: self.notices.clone(),
@@ -529,6 +544,7 @@ pub fn create(request: Request) -> Result<()> {
                 // capture hooks: BOSUN_MENU=1 opens the ☰ panel, BOSUN_ABOUT=1 the About dialog
                 menu: std::env::var_os("BOSUN_MENU").map(|_| crate::pages::menu::MenuInfo::load()),
                 about: std::env::var_os("BOSUN_ABOUT").is_some(),
+                self_update: Default::default(),
                 // capture hook: BOSUN_BELL=1 opens the bell's panel
                 bell: std::env::var_os("BOSUN_BELL")
                     .map(|_| crate::pages::actions::Actions::load(false)),
@@ -708,6 +724,7 @@ struct Key {
     rescue: Option<crate::pages::rescue::RescueView>,
     menu: Option<crate::pages::menu::MenuInfo>,
     about: bool,
+    update_line: (String, bool),
     settings: Option<crate::pages::settings::SettingsView>,
     bell: Option<crate::pages::actions::Actions>,
     notices: Option<Vec<bosun_core::notices::Notice>>,
@@ -740,6 +757,7 @@ impl Key {
             rescue: v.rescue.clone(),
             menu: v.menu,
             about: v.about,
+            update_line: v.update_line.clone(),
             settings: v.settings.clone(),
             bell: v.bell,
             notices: v.notices.clone(),
@@ -1050,18 +1068,24 @@ fn click(hwnd: HWND, h: Hit) {
             invalidate(hwnd);
         }
         Hit::MenuItem(k) => menu_item(hwnd, k),
+        Hit::AboutUpdate => {
+            with_app(|a| a.self_update.click());
+            poll_self_update(hwnd);
+            invalidate(hwnd);
+        }
         Hit::NoticeItem(k) => {
-            // opens the page the notification is about
+            // opens the page the notification is about ("about": a new version)
             let page = with_app(|a| {
                 let n = a.notices.take()?;
-                n.get(k as usize).and_then(|x| Page::from_arg(&x.page))
+                n.get(k as usize).map(|x| x.page.clone())
             })
             .flatten();
-            if let Some(p) = page {
+            if let Some(page) = page {
                 apply_request(
                     hwnd,
                     Request {
-                        page: Some(p),
+                        page: Page::from_arg(&page),
+                        about: page == "about",
                         ..Default::default()
                     },
                 );
@@ -1532,15 +1556,30 @@ fn menu_item(hwnd: HWND, k: u8) {
         5 => {
             shell("ms-settings:windowsupdate", "");
         }
-        6 => {
-            with_app(|a| a.about = true);
-        }
+        6 => open_about(hwnd),
         // SAFETY: closing our own window ends the process.
         _ => unsafe {
             let _ = DestroyWindow(hwnd);
         },
     }
     invalidate(hwnd);
+}
+
+/// Shows About and checks for a newer Bosun (once per window).
+fn open_about(hwnd: HWND) {
+    with_app(|a| {
+        a.about = true;
+        a.self_update.check_if_idle();
+    });
+    poll_self_update(hwnd);
+}
+
+/// Keeps the self-update timer running while its worker does.
+fn poll_self_update(hwnd: HWND) {
+    if with_app(|a| a.self_update.busy()) == Some(true) {
+        // SAFETY: timer on our own window.
+        unsafe { SetTimer(Some(hwnd), SELF_UPDATE_TIMER, 250, None) };
+    }
 }
 
 /// Closes any overlay (optimizer, Turbo, tools) and shows the Rescue Center.
@@ -1744,6 +1783,13 @@ extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT
             if busy != Some(true) {
                 // SAFETY: our own timer.
                 let _ = unsafe { KillTimer(Some(hwnd), DRIVER_TIMER) };
+            }
+            invalidate(hwnd);
+        }
+        WM_TIMER if wp.0 == SELF_UPDATE_TIMER => {
+            if with_app(|a| a.self_update.poll()) != Some(true) {
+                // SAFETY: our own timer.
+                let _ = unsafe { KillTimer(Some(hwnd), SELF_UPDATE_TIMER) };
             }
             invalidate(hwnd);
         }
@@ -2126,6 +2172,7 @@ pub fn idle_view() -> View {
         rescue: None,
         menu: None,
         about: false,
+        update_line: ("Check for updates".into(), true),
         settings: None,
         bell: None,
         notices: None,
@@ -2151,12 +2198,12 @@ mod tests {
             Request {
                 page: Some(Page::Care),
                 scan: true,
-                settings: false,
+                ..Default::default()
             },
             Request {
-                page: None,
-                scan: false,
                 settings: true,
+                about: true,
+                ..Default::default()
             },
         ] {
             assert_eq!(Request::decode(r.encode()), r);

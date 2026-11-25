@@ -29,6 +29,7 @@ pub struct MenuInfo {
     pub tray_start: bool,
     pub auto_ram: bool,
     pub advisor: bool,
+    pub auto_update: bool,
 }
 
 impl MenuInfo {
@@ -38,6 +39,7 @@ impl MenuInfo {
             tray_start: bosun_core::startup::autostart(AUTOSTART),
             auto_ram: crate::tray_ini::get("auto_ram_clean", false),
             advisor: bosun_core::homepage::advisor_on(),
+            auto_update: crate::tray_ini::get("auto_update", false),
         }
     }
 }
@@ -59,19 +61,21 @@ pub fn flip(info: &MenuInfo, k: u8) -> Result<(), &'static str> {
             )
         }
         2 => crate::tray_ini::set("auto_ram_clean", !info.auto_ram),
-        _ => bosun_core::homepage::set_advisor(!info.advisor),
+        3 => bosun_core::homepage::set_advisor(!info.advisor),
+        _ => crate::tray_ini::set("auto_update", !info.auto_update),
     };
     saved.map_err(|_| "Couldn't save that setting.")
 }
 
 /// (label above, line beside the switch)
-const SETTINGS: [(&str, &str); 4] = [
+const SETTINGS: [(&str, &str); 5] = [
     ("Floating widget:", "Show RAM and CPU on the desktop"),
     ("Windows startup:", "Start the Bosun tray with Windows"),
     ("Auto RAM Clean:", "Trim memory when RAM use runs high"),
     ("Homepage Advisor:", "Warn if the browser homepage changes"),
+    ("Updates:", "Install new versions automatically"),
 ];
-const SETTING_Y: [f32; 4] = [164.0, 234.0, 304.0, 374.0];
+const SETTING_Y: [f32; 5] = [164.0, 234.0, 304.0, 374.0, 444.0];
 
 /// (label, cap centre y); dividers sit at 124 and 243.
 const ITEMS: [(&str, f32); 8] = [
@@ -291,7 +295,13 @@ pub fn draw_menu(p: &Painter, v: &View, info: &MenuInfo) {
             y + 30.0,
             0xE6E6E6,
         );
-        let on = [info.widget, info.tray_start, info.auto_ram, info.advisor][k];
+        let on = [
+            info.widget,
+            info.tray_start,
+            info.auto_ram,
+            info.advisor,
+            info.auto_update,
+        ][k];
         toggle(p, s, on, v.hover == Hit::MenuToggle(k as u8));
     }
     p.logo(x0 + 21.0, v.h - 27.0, 16.0);
@@ -346,10 +356,21 @@ fn approx_w(s: &str) -> f32 {
     s.chars().count() as f32 * 6.4
 }
 
+/// The update status line under the version (cap centre y).
+const UPDATE_Y: f32 = 262.0;
+
+fn update_rect(d: &D2D_RECT_F, w: f32) -> D2D_RECT_F {
+    rect(d.left + 217.0 - w / 2.0, d.top + UPDATE_Y - 9.0, w, 18.0)
+}
+
 pub fn about_hit(v: &View, x: f32, y: f32) -> Hit {
     let d = dialog(v);
     if !contains(&d, x, y) || contains(&rect(d.right - 34.0, d.top, 34.0, 34.0), x, y) {
         return Hit::AboutClose;
+    }
+    let (text, link) = &v.update_line;
+    if *link && contains(&update_rect(&d, approx_w(text)), x, y) {
+        return Hit::AboutUpdate;
     }
     link_rects(approx_w, &d)
         .iter()
@@ -388,19 +409,33 @@ pub fn draw_about(p: &Painter, v: &View) {
     mid("Bosun SystemCare", &f.m18, 18.0, 219.0, 0xE6E6E6);
     let ver = format!("Version {}", env!("CARGO_PKG_VERSION"));
     mid(&ver, &f.m13, 13.0, 244.0, 0xD0D0D0);
-    mid("NO WARRANTY", &f.m13, 13.0, 278.0, 0xD0D0D0);
+    let (text, link) = &v.update_line;
+    if *link {
+        let hot = v.hover == Hit::AboutUpdate;
+        let c = if hot { 0x8CC4FF } else { 0x61ADF8 };
+        let w = p.g.measure(text, &f.m13);
+        let r = update_rect(&d, w);
+        text_at(p, text, &f.m13, 13.0, r.left, w + 4.0, d.top + UPDATE_Y, c);
+        if hot {
+            let uy = d.top + UPDATE_Y + 7.5;
+            p.line(r.left, uy, r.right, uy, 1.0, col(c));
+        }
+    } else {
+        mid(text, &f.m13, 13.0, UPDATE_Y, 0x9A9A9A);
+    }
+    mid("NO WARRANTY", &f.m13, 13.0, 292.0, 0xD0D0D0);
     mid(
         "This program is provided as is, without",
         &f.m13,
         13.0,
-        305.0,
+        317.0,
         0xB8B8B8,
     );
     mid(
         "warranty of any kind. Every change is journaled.",
         &f.m13,
         13.0,
-        324.0,
+        336.0,
         0xB8B8B8,
     );
     mid(

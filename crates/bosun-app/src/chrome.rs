@@ -196,6 +196,7 @@ mod tests {
             rescue: None,
             menu: None,
             about: false,
+            update_line: Default::default(),
             settings: None,
             bell: None,
             notices: None,

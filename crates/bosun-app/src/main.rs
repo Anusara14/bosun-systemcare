@@ -9,6 +9,7 @@ mod frame;
 mod icons;
 mod pages;
 mod scan;
+mod self_update;
 mod tray_ini;
 mod window;
 
@@ -33,6 +34,8 @@ fn request() -> window::Request {
             .and_then(|w| Page::from_arg(&w[1])),
         scan: args.iter().any(|a| a == "--scan"),
         settings: args.iter().any(|a| a == "--settings"),
+        // the tray's "new version" notification opens About
+        about: args.windows(2).any(|w| w[0] == "--page" && w[1] == "about"),
     }
 }
 
@@ -102,6 +105,9 @@ fn run() -> Result<()> {
 fn main() {
     if std::env::args().any(|a| a == "--auto-clean") {
         return auto_clean();
+    }
+    if std::env::args().any(|a| a == "--check-update") {
+        std::process::exit(self_update::headless());
     }
     // elevated by the Startup Optimizer: read Windows' startup measurements
     // into the file it names, then exit (0 = measured)

@@ -20,6 +20,8 @@ pub struct Settings {
     pub notify_auto_ram: bool,
     pub notify_homepage: bool,
     pub notify_auto_clean: bool,
+    /// When the tray last looked for a newer Bosun (unix secs).
+    pub update_last: u64,
 }
 
 impl Default for Settings {
@@ -36,6 +38,7 @@ impl Default for Settings {
             notify_auto_ram: true,
             notify_homepage: true,
             notify_auto_clean: true,
+            update_last: 0,
         }
     }
 }
@@ -76,6 +79,7 @@ impl Settings {
                 "notify_auto_ram" => s.notify_auto_ram = v.trim() != "0",
                 "notify_homepage" => s.notify_homepage = v.trim() != "0",
                 "notify_auto_clean" => s.notify_auto_clean = v.trim() != "0",
+                "update_last" => s.update_last = v.trim().parse().unwrap_or(0),
                 "widget_x" => x = v.trim().parse().ok(),
                 "widget_y" => y = v.trim().parse().ok(),
                 _ => {}
@@ -108,6 +112,7 @@ notify_auto_clean={}
             u8::from(self.notify_homepage),
             u8::from(self.notify_auto_clean)
         ));
+        out.push_str(&format!("update_last={}\n", self.update_last));
         if let Some((x, y)) = self.widget_pos {
             out.push_str(&format!("widget_x={x}\nwidget_y={y}\n"));
         }
@@ -148,6 +153,7 @@ mod tests {
             notify_auto_ram: false,
             notify_homepage: true,
             notify_auto_clean: false,
+            update_last: 1_795_000_100,
         };
         assert_eq!(Settings::parse(&s.serialize()), s);
     }

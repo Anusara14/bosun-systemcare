@@ -107,6 +107,7 @@ pub fn set(k: usize, on: bool) -> Result<(), &'static str> {
         tray_start: !on,
         auto_ram: !on,
         advisor: !on,
+        auto_update: false,
     };
     match k {
         0 => crate::pages::menu::flip(&m, 3),

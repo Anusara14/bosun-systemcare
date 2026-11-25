@@ -37,6 +37,10 @@ const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstal
 struct Opts {
     quiet: bool,
     files_only: bool,
+    /// `--update` (from Bosun's updater): quiet, keeps the autostart choice,
+    /// restarts the tray if it was running and, with `--open`, the app.
+    update: bool,
+    open: bool,
     dir: PathBuf,
 }
 
@@ -64,16 +68,20 @@ fn tell(o: &Opts, text: &str, style: MESSAGEBOX_STYLE) {
 }
 
 /// Asks a running main window and tray to close (they're ours: closing is
-/// the same as the user clicking Close / Exit).
-fn close_running() {
+/// the same as the user clicking Close / Exit). Returns whether the tray was
+/// running.
+fn close_running() -> bool {
+    let mut tray = false;
     for class in [w!("BosunMain"), w!("BosunTrayHost")] {
         // SAFETY: finds our own windows by class and posts them WM_CLOSE.
         unsafe {
             if let Ok(h) = FindWindowW(class, PCWSTR::null()) {
+                tray |= class == w!("BosunTrayHost");
                 let _ = PostMessageW(Some(h), WM_CLOSE, WPARAM(0), LPARAM(0));
             }
         }
     }
+    tray
 }
 
 /// Writes `bytes` to `path`, retrying while a closing program still holds it.
@@ -191,7 +199,7 @@ fn install(o: &Opts) -> Result<(), String> {
     if !ask(o, &question) {
         return Ok(());
     }
-    close_running();
+    let tray_was_running = close_running();
     std::fs::create_dir_all(&o.dir).map_err(|e| format!("Couldn't create the folder: {e}"))?;
     let (app, tray) = (o.dir.join("bosun.exe"), o.dir.join("bosun-tray.exe"));
     write_retry(&app, APP).map_err(|e| format!("Couldn't write bosun.exe: {e}"))?;
@@ -211,10 +219,21 @@ fn install(o: &Opts) -> Result<(), String> {
         shortcut(&app, &link)
             .map_err(|e| format!("Couldn't create the Start menu shortcut: {e}"))?;
     }
-    let cmd = format!("\"{}\"", tray.display());
-    bosun_core::startup::set_autostart(bosun_core::startup::AUTOSTART_NAME, Some(&cmd))
-        .map_err(|e| format!("Couldn't add the tray to startup: {e}"))?;
-    if !o.quiet {
+    // an update keeps the user's choice about starting with Windows
+    let name = bosun_core::startup::AUTOSTART_NAME;
+    if !o.update || bosun_core::startup::autostart(name) {
+        let cmd = format!("\"{}\"", tray.display());
+        bosun_core::startup::set_autostart(name, Some(&cmd))
+            .map_err(|e| format!("Couldn't add the tray to startup: {e}"))?;
+    }
+    if o.update {
+        if tray_was_running {
+            spawn(&tray);
+        }
+        if o.open {
+            spawn(&app);
+        }
+    } else if !o.quiet {
         spawn(&tray);
         spawn(&app);
     }
@@ -248,7 +267,7 @@ fn uninstall(o: &Opts) -> Result<(), String> {
             "Also delete your Bosun settings and the Rescue Center journal?\n\nChoose No to keep them (for a later reinstall).",
             MB_YESNO | MB_ICONQUESTION,
         ) == IDYES;
-    close_running();
+    let _ = close_running();
     std::thread::sleep(Duration::from_millis(800));
     let _ = bosun_core::startup::set_autostart(bosun_core::startup::AUTOSTART_NAME, None);
     if let Some(link) = start_menu_link() {
@@ -290,9 +309,13 @@ fn main() {
         message("LOCALAPPDATA is not set.", MB_ICONERROR);
         std::process::exit(1);
     };
+    let has = |flag: &str| args.iter().any(|a| a == flag);
+    let update = has("--update");
     let o = Opts {
-        quiet: args.iter().any(|a| a == "--quiet"),
-        files_only: args.iter().any(|a| a == "--files-only"),
+        quiet: has("--quiet") || update,
+        files_only: has("--files-only"),
+        update,
+        open: has("--open"),
         dir,
     };
     let r = if args.iter().any(|a| a == "--uninstall") {
@@ -301,7 +324,12 @@ fn main() {
         install(&o)
     };
     if let Err(e) = r {
-        tell(&o, &e, MB_ICONERROR);
+        // a failed update still says so: nobody else will
+        if o.update {
+            message(&format!("Bosun couldn't update.\n\n{e}"), MB_ICONERROR);
+        } else {
+            tell(&o, &e, MB_ICONERROR);
+        }
         std::process::exit(1);
     }
 }

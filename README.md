@@ -9,6 +9,7 @@
   <a href="https://github.com/Anusara14/bosun-systemcare/releases/latest"><img src="https://img.shields.io/github/v/release/Anusara14/bosun-systemcare?label=release&color=1E9CFF" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?logo=windows" alt="Windows 10 | 11">
   <img src="https://img.shields.io/badge/built%20with-Rust-B7410E?logo=rust" alt="Built with Rust">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/tray-~10%20MB%20RAM-2B2B2B" alt="Tray uses about 10 MB of RAM">
   <img src="https://img.shields.io/badge/telemetry-none-2ea44f" alt="No telemetry">
 </p>
@@ -85,3 +86,7 @@ First installable release.
 
 ### 0.1.0
 Development builds: the main window, Care scan, Speed Up, Protect, Software Updater, Rescue Center, and the tray with its widget and Performance Monitor.
+
+## License
+
+[MIT](LICENSE).

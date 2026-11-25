@@ -5,7 +5,7 @@ members = ["crates/bosun-core", "crates/bosun-ui", "crates/bosun-tray", "crates/
 [workspace.package]
 edition = "2024"
 version = "0.2.0"
-license = "Proprietary"
+license = "MIT"
 
 [workspace.dependencies]
 windows = "0.62"
